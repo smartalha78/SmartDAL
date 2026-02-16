@@ -143,7 +143,7 @@ def GetMenu():
 
             response_data[f"tbl{index}"] = table_data
         
-        print(f"Successfully processed all tables")
+        print(f"Successfully processed all tables .")
         return jsonify({
             "status": "success",
             "data": response_data
