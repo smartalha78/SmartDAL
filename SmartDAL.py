@@ -6,7 +6,7 @@ import math
 
 app = Flask(__name__)
 
-# ================== CORS CONFIG ==================
+# ================== CORS CONFIGURATION ==================
 CORS(
     app,
     resources={r"/*": {"origins": "*"}},
