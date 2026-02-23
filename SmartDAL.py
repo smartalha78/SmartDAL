@@ -52,7 +52,7 @@ def guess_type(value):
             return "string"
 
 def execute_soap_query(query):
-    """Utility function to execute SQL queries and return results in a consistent format"""
+    """Utility function to execute SQL queries and return results in a consistent as format"""
     conn = None
     cursor = None
     try:
