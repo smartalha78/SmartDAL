@@ -1,0 +1,84 @@
+# routes/main_routes.py
+from flask import jsonify
+from config.database import CONN_STR
+import pyodbc
+from datetime import datetime
+
+def register_main_routes(app):
+    """Register main routes directly with the app"""
+    
+    @app.route('/health', methods=['GET'])
+    def health_check():
+        """Health check endpoint"""
+        try:
+            conn = pyodbc.connect(CONN_STR)
+            conn.close()
+            return jsonify({
+                "status": "healthy",
+                "database": "connected",
+                "server": "running",
+                "timestamp": datetime.now().isoformat()
+            }), 200
+        except Exception as ex:
+            return jsonify({
+                "status": "unhealthy",
+                "database": "disconnected",
+                "error": str(ex)
+            }), 500
+
+    @app.route('/', methods=['GET'])
+    def index():
+        """Root endpoint with API information"""
+        return jsonify({
+            "api": "SmartGold ERP API",
+            "version": "2.0",
+            "timestamp": datetime.now().isoformat(),
+            "endpoints": {
+                "auth": {
+                    "/GetMenu": "POST - Get user menu"
+                },
+                "voucher": {
+                    "/GetVno": "GET - Get voucher number",
+                    "/FillTable": "POST - Fill table data",
+                    "/gl_voucher_generation_status": "POST - Update GL voucher status",
+                    "/gl_Posting": "POST - GL posting",
+                    "/stk_Posting": "POST - Stock posting"
+                },
+                "table": {
+                    "/get-table-headers": "POST - Get table headers",
+                    "/get-table-structure": "POST - Get table structure",
+                    "/get-table-relationships": "POST - Get relationships",
+                    "/get-table-data": "POST - Get paginated data",
+                    "/check-table/<table_name>": "GET - Check table structure",
+                    "/debug/table-structure/<table_name>": "GET - Debug table structure"
+                },
+                "employee": {
+                    "/insert-EmployeeHeadDet": "POST - Insert employee with details"
+                },
+                "generic_crud": {
+                    "/table/insert": "POST - Generic INSERT",
+                    "/table/update": "POST - Generic UPDATE",
+                    "/table/delete": "POST - Generic DELETE",
+                    "/table/bulk-insert": "POST - Bulk insert"
+                },
+                "screen": {
+                    "/screen/get-config": "POST - Get screen config",
+                    "/screen/document-statuses": "POST - Get document statuses",
+                    "/screen/menu-permissions": "POST - Get menu permissions",
+                    "/screen/update-employment-status": "POST - Update employment status",
+                    "/screen/refresh-table-data": "POST - Refresh table data"
+                },
+                "system": {
+                    "/health": "GET - Health check",
+                    "/": "GET - API information"
+                }
+            }
+        }), 200
+
+    @app.after_request
+    def after_request(response):
+        """Add CORS headers to every response"""
+        response.headers.add('Access-Control-Allow-Origin', '*')
+        response.headers.add('Access-Control-Allow-Headers', 'Content-Type,Authorization')
+        response.headers.add('Access-Control-Allow-Methods', 'GET,PUT,POST,DELETE,OPTIONS')
+        return response
