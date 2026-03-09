@@ -39,7 +39,7 @@ def insert_employee_head_det():
         
         # Get company data
         company_data = get_company_data()
-        company_offcode = company_data.get("company", {}).get("offcode", "1010")
+        company_offcode = company_data.get("company", {}).get("offcode", "0101")
         
         # Get branch code
         branch_code = None
@@ -230,7 +230,7 @@ def insert_employee_head_det():
         # Add system fields
         head_row["Code"] = emp_code
         head_row["offcode"] = company_offcode
-        head_row["bcode"] = branch_code or "101001"
+        head_row["bcode"] = branch_code or "010101"
         head_row["compcode"] = "01"
         head_row["createdby"] = createdby
         head_row["createdate"] = current_date

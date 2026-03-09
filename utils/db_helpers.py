@@ -70,8 +70,8 @@ def get_company_data():
         response = requests.post(
             "http://192.168.100.113:8000/GetMenu",
             json={
-                "username": "administrator",
-                "userpassword": "admin",
+                "username": "talha",
+                "userpassword": "abc123",
                 "Menuid": "01",
                 "nooftables": "3"
             }
