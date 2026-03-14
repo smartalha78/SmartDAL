@@ -2,3 +2,12 @@ Flask==2.3.3
 flask-cors==4.0.0
 pyodbc==5.0.1
 requests==2.31.0
+
+For Git 
+->For Push on Git
+  -> git add . or Filename
+  -> git commit -m "Updation in Mater Data Files"
+  -> git branch -M main
+  ->git push -u origin main
+->For Pull from Git
+  ->git pull origin main
