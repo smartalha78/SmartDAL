@@ -7,9 +7,10 @@ import logging
 logger = logging.getLogger(__name__)
 
 # Connection string
+DB_SERVER = "192.168.100.113"
 CONN_STR = (
     "DRIVER={SQL Server};"
-    "SERVER=192.168.100.113;"
+    f"SERVER={DB_SERVER};"
     "DATABASE=AwaisFancy;"
     "UID=sa;"
     "PWD=786"

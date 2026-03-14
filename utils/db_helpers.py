@@ -5,7 +5,8 @@ from datetime import datetime
 import math
 from config.database import CONN_STR
 import logging
-import requests  
+import requests 
+from config.database import DB_SERVER 
 logger = logging.getLogger(__name__)
 
 # Cache for table structures
@@ -68,7 +69,7 @@ def get_company_data():
     try:
         # Call your login API to get full menu
         response = requests.post(
-            "http://192.168.100.113:8000/GetMenu",
+            f"http://{DB_SERVER}:8000/GetMenu",
             json={
                 "username": "talha",
                 "userpassword": "abc123",
