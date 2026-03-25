@@ -56,16 +56,17 @@ def gl_voucher_generation_status():
         if 'conn' in locals():
             conn.close()
 
-@voucher_bp.route('/GetVno', methods=['GET', 'OPTIONS'])
+@voucher_bp.route('/GetVno', methods=['POST', 'OPTIONS'])
 def GetVno():
     if request.method == 'OPTIONS':
         return '', 200
     
-    Tablename = request.args.get("Tablename")
-    Vdate = request.args.get("Vdate")
-    Vtype = request.args.get("Vtype")
-    Offcode = request.args.get("Offcode")
-    Bcode = request.args.get("Bcode")
+    data = request.json
+    Tablename = data.get("Tablename")
+    Vdate = data.get("Vdate")
+    Vtype = data.get("Vtype")
+    Offcode = data.get("Offcode")
+    Bcode = data.get("Bcode")
 
     conn = None
     cursor = None

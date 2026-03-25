@@ -228,9 +228,15 @@ def generic_upsert():
         
         # Check if record exists
         where_conditions = {}
+
+# Add primary keys
         for pk in primary_keys:
-            if pk in row_data:
-                where_conditions[pk] = row_data[pk]
+          if pk in row_data:
+             where_conditions[pk] = row_data[pk]
+
+# 🔴 IMPORTANT: also include offcode if present
+        if "offcode" in row_data:
+           where_conditions["offcode"] = row_data["offcode"]
         
         if not where_conditions:
             # No primary key values provided, assume insert
@@ -371,6 +377,359 @@ def generic_delete():
     
     except Exception as err:
         print("❌ Generic Delete Error:", err)
+        return jsonify({"success": False, "error": str(err)}), 500
+
+@generic_crud_bp.route('/insert-SThead-det', methods=['POST', 'OPTIONS'])
+def insert_shift_head_detail():
+    """
+    Insert Shift Head with multiple Detail records in a transaction
+    """
+    if request.method == 'OPTIONS':
+        return '', 200
+    
+    try:
+        data = request.json
+        if not data:
+            return jsonify({"success": False, "error": "No JSON data provided"}), 400
+        
+        head = data.get("head", {})
+        details = data.get("details", [])
+        selected_branch = data.get("selectedBranch", "")
+        
+        if not head:
+            return jsonify({"success": False, "error": "head data is required"}), 400
+        
+        if not details or not isinstance(details, list):
+            return jsonify({"success": False, "error": "details array is required"}), 400
+        
+        # Get table names
+        head_table = head.get("tableName", "HRMSShift")
+        head_data = head.get("data", {})
+        
+        if not head_data:
+            return jsonify({"success": False, "error": "head data object is required"}), 400
+        
+        # Get identity column for head table
+        head_identity = get_table_identity_column(head_table)
+        
+        # Insert Head record
+        head_columns = []
+        head_values = []
+        head_params = []
+        
+        for column, value in head_data.items():
+            if head_identity and column.lower() == head_identity.lower():
+                continue
+            head_columns.append(column)
+            head_values.append("?")
+            head_params.append(value if value != "" else None)
+        
+        if not head_columns:
+            return jsonify({"success": False, "error": "No valid columns to insert in head"}), 400
+        
+        head_columns_str = ", ".join(head_columns)
+        head_placeholders = ", ".join(head_values)
+        insert_head_query = f"INSERT INTO {head_table} ({head_columns_str}) VALUES ({head_placeholders})"
+        
+        print("📝 INSERT HEAD QUERY:", insert_head_query)
+        print("📝 HEAD PARAMS:", head_params)
+        
+        # Execute head insert
+        head_rows_affected = execute_non_query(insert_head_query, head_params)
+        
+        if head_rows_affected == 0:
+            return jsonify({"success": False, "error": "Failed to insert head record"}), 500
+        
+        # Insert Detail records
+        detail_table = "HRMSShiftTimeTable"
+        detail_identity = get_table_identity_column(detail_table)
+        detail_results = []
+        
+        for idx, detail in enumerate(details):
+            try:
+                detail_data = detail.get("data", {})
+                
+                if not detail_data:
+                    detail_results.append({
+                        "row": idx,
+                        "success": False,
+                        "error": "No detail data provided"
+                    })
+                    continue
+                
+                # Add offcode if not present
+                if "offcode" not in detail_data and selected_branch:
+                    detail_data["offcode"] = selected_branch
+                
+                # Insert detail record
+                detail_columns = []
+                detail_values = []
+                detail_params = []
+                
+                for column, value in detail_data.items():
+                    if detail_identity and column.lower() == detail_identity.lower():
+                        continue
+                    detail_columns.append(column)
+                    detail_values.append("?")
+                    detail_params.append(value if value != "" else None)
+                
+                if detail_columns:
+                    detail_columns_str = ", ".join(detail_columns)
+                    detail_placeholders = ", ".join(detail_values)
+                    insert_detail_query = f"INSERT INTO {detail_table} ({detail_columns_str}) VALUES ({detail_placeholders})"
+                    
+                    print(f"📝 INSERT DETAIL {idx} QUERY:", insert_detail_query)
+                    print(f"📝 DETAIL {idx} PARAMS:", detail_params)
+                    
+                    detail_rows_affected = execute_non_query(insert_detail_query, detail_params)
+                    
+                    detail_results.append({
+                        "row": idx,
+                        "success": True,
+                        "rowsAffected": detail_rows_affected,
+                        "data": detail_data
+                    })
+                else:
+                    detail_results.append({
+                        "row": idx,
+                        "success": False,
+                        "error": "No valid columns to insert"
+                    })
+                    
+            except Exception as detail_err:
+                print(f"❌ Error inserting detail {idx}:", detail_err)
+                detail_results.append({
+                    "row": idx,
+                    "success": False,
+                    "error": str(detail_err)
+                })
+        
+        # Get the newly inserted head record
+        new_head_record = None
+        head_primary_keys = get_table_primary_keys(head_table)
+        
+        if head_primary_keys and len(head_primary_keys) > 0:
+            where_conditions = []
+            for pk in head_primary_keys:
+                if pk in head_data:
+                    where_conditions.append(f"{pk} = '{head_data[pk]}'")
+            
+            if where_conditions:
+                select_head_query = f"SELECT * FROM {head_table} WHERE {' AND '.join(where_conditions)}"
+                head_result = execute_soap_query(select_head_query)
+                if head_result:
+                    new_head_record = {}
+                    for key in head_result[0].keys():
+                        new_head_record[key] = head_result[0][key][0] if head_result[0].get(key) and len(head_result[0][key]) > 0 else ""
+        
+        return jsonify({
+            "success": True,
+            "message": f"Shift saved successfully with {len([r for r in detail_results if r['success']])} details",
+            "head": {
+                "table": head_table,
+                "rowsAffected": head_rows_affected,
+                "data": new_head_record or head_data
+            },
+            "details": detail_results,
+            "successCount": len([r for r in detail_results if r['success']]),
+            "errorCount": len([r for r in detail_results if not r['success']])
+        }), 200
+    
+    except Exception as err:
+        print("❌ Insert Shift Head Detail Error:", err)
+        return jsonify({"success": False, "error": str(err)}), 500
+
+
+@generic_crud_bp.route('/update-SThead-det', methods=['POST', 'OPTIONS'])
+def update_shift_head_detail():
+    """
+    Update Shift Head with multiple Detail records in a transaction
+    """
+    if request.method == 'OPTIONS':
+        return '', 200
+    
+    try:
+        data = request.json
+        if not data:
+            return jsonify({"success": False, "error": "No JSON data provided"}), 400
+        
+        head = data.get("head", {})
+        details = data.get("details", [])
+        selected_branch = data.get("selectedBranch", "")
+        
+        if not head:
+            return jsonify({"success": False, "error": "head data is required"}), 400
+        
+        if not details or not isinstance(details, list):
+            return jsonify({"success": False, "error": "details array is required"}), 400
+        
+        # Update Head record
+        head_table = head.get("tableName", "HRMSShift")
+        head_data = head.get("data", {})
+        
+        if not head_data:
+            return jsonify({"success": False, "error": "head data object is required"}), 400
+        
+        # Build UPDATE for head using Code and offcode as WHERE
+        set_clauses = []
+        head_params = []
+        
+        for column, value in head_data.items():
+            if column in ['Code', 'offcode']:  # Skip key fields
+                continue
+            set_clauses.append(f"{column} = ?")
+            head_params.append(value if value != "" else None)
+        
+        if set_clauses:
+            # Add WHERE conditions
+            where_clauses = ["Code = ?", "offcode = ?"]
+            head_params.append(head_data.get('Code', ''))
+            head_params.append(selected_branch or head_data.get('offcode', ''))
+            
+            set_str = ", ".join(set_clauses)
+            where_str = " AND ".join(where_clauses)
+            update_head_query = f"UPDATE {head_table} SET {set_str} WHERE {where_str}"
+            
+            print("📝 UPDATE HEAD QUERY:", update_head_query)
+            print("📝 HEAD PARAMS:", head_params)
+            
+            head_rows_affected = execute_non_query(update_head_query, head_params)
+        else:
+            head_rows_affected = 0
+        
+        # Update/Insert Detail records
+        detail_table = "HRMSShiftTimeTable"
+        detail_results = []
+        
+        for idx, detail in enumerate(details):
+            try:
+                detail_data = detail.get("data", {})
+                
+                if not detail_data:
+                    detail_results.append({
+                        "row": idx,
+                        "success": False,
+                        "error": "No detail data provided"
+                    })
+                    continue
+                
+                # Add offcode if not present
+                if "offcode" not in detail_data and selected_branch:
+                    detail_data["offcode"] = selected_branch
+                
+                # Check if detail exists using ShiftCode, WeekDay, and offcode
+                check_query = f"""
+                    SELECT COUNT(*) as count FROM {detail_table} 
+                    WHERE ShiftCode = '{detail_data.get('ShiftCode', '')}' 
+                    AND WeekDay = '{detail_data.get('WeekDay', '')}' 
+                    AND offcode = '{selected_branch}'
+                """
+                
+                check_result = execute_soap_query(check_query)
+                record_exists = int(check_result[0].get("count", [0])[0]) > 0
+                
+                if record_exists:
+                    # UPDATE existing detail - IMPORTANT: Exclude Pk from update
+                    set_clauses = []
+                    detail_params = []
+                    
+                    for column, value in detail_data.items():
+                        # Skip key fields AND identity column (Pk)
+                        if column in ['ShiftCode', 'WeekDay', 'offcode', 'Pk']:
+                            continue
+                        set_clauses.append(f"{column} = ?")
+                        detail_params.append(value if value != "" else None)
+                    
+                    if set_clauses:
+                        where_clauses = ["ShiftCode = ?", "WeekDay = ?", "offcode = ?"]
+                        detail_params.extend([
+                            detail_data.get('ShiftCode', ''),
+                            detail_data.get('WeekDay', ''),
+                            selected_branch
+                        ])
+                        
+                        set_str = ", ".join(set_clauses)
+                        where_str = " AND ".join(where_clauses)
+                        update_detail_query = f"UPDATE {detail_table} SET {set_str} WHERE {where_str}"
+                        
+                        print(f"📝 UPDATE DETAIL {idx} QUERY:", update_detail_query)
+                        print(f"📝 DETAIL {idx} PARAMS:", detail_params)
+                        
+                        detail_rows_affected = execute_non_query(update_detail_query, detail_params)
+                        
+                        detail_results.append({
+                            "row": idx,
+                            "success": True,
+                            "operation": "update",
+                            "rowsAffected": detail_rows_affected,
+                            "data": detail_data
+                        })
+                    else:
+                        detail_results.append({
+                            "row": idx,
+                            "success": True,
+                            "operation": "nochange",
+                            "message": "No changes to update"
+                        })
+                else:
+                    # INSERT new detail - Exclude Pk as it's auto-generated
+                    detail_columns = []
+                    detail_values = []
+                    detail_params = []
+                    
+                    for column, value in detail_data.items():
+                        if column.lower() == 'pk':  # Skip PK for insert - it's auto-generated
+                            continue
+                        detail_columns.append(column)
+                        detail_values.append("?")
+                        detail_params.append(value if value != "" else None)
+                    
+                    if detail_columns:
+                        detail_columns_str = ", ".join(detail_columns)
+                        detail_placeholders = ", ".join(detail_values)
+                        insert_detail_query = f"INSERT INTO {detail_table} ({detail_columns_str}) VALUES ({detail_placeholders})"
+                        
+                        print(f"📝 INSERT DETAIL {idx} QUERY:", insert_detail_query)
+                        print(f"📝 DETAIL {idx} PARAMS:", detail_params)
+                        
+                        detail_rows_affected = execute_non_query(insert_detail_query, detail_params)
+                        
+                        detail_results.append({
+                            "row": idx,
+                            "success": True,
+                            "operation": "insert",
+                            "rowsAffected": detail_rows_affected,
+                            "data": detail_data
+                        })
+                    else:
+                        detail_results.append({
+                            "row": idx,
+                            "success": False,
+                            "error": "No valid columns to insert"
+                        })
+                    
+            except Exception as detail_err:
+                print(f"❌ Error processing detail {idx}:", detail_err)
+                detail_results.append({
+                    "row": idx,
+                    "success": False,
+                    "error": str(detail_err)
+                })
+        
+        return jsonify({
+            "success": True,
+            "message": f"Shift updated successfully",
+            "head": {
+                "table": head_table,
+                "rowsAffected": head_rows_affected
+            },
+            "details": detail_results,
+            "successCount": len([r for r in detail_results if r['success']]),
+            "errorCount": len([r for r in detail_results if not r['success']])
+        }), 200
+    
+    except Exception as err:
+        print("❌ Update Shift Head Detail Error:", err)
         return jsonify({"success": False, "error": str(err)}), 500
 
 @generic_crud_bp.route('/table/bulk-insert', methods=['POST', 'OPTIONS'])
