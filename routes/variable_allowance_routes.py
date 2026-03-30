@@ -1,6 +1,6 @@
-from flask import request, jsonify
+from flask import request, jsonify, g
 from . import variable_allowance_bp
-import pyodbc
+from config.database import get_db, close_db
 import requests
 from datetime import datetime
 import logging
@@ -9,44 +9,27 @@ import traceback
 
 logger = logging.getLogger(__name__)
 
-# Database connection parameters
-DB_SERVER = "192.168.100.113"
-DB_NAME = "AwaisFancy"
-DB_USER = "sa"
-DB_PASSWORD = "786"
+# API endpoint
+GET_VNO_API = "http://192.168.100.113:8000/GetVnoVockey"
 
-def get_db_connection():
-    """Get database connection using your working config"""
-    try:
-        conn_str = (
-            "DRIVER={SQL Server};"
-            f"SERVER={DB_SERVER};"
-            f"DATABASE={DB_NAME};"
-            f"UID={DB_USER};"
-            f"PWD={DB_PASSWORD};"
-            "Connection Timeout=30;"
-        )
-        conn = pyodbc.connect(conn_str, timeout=30, autocommit=False)
-        logger.info("✅ Database connection successful")
-        return conn
-    except Exception as e:
-        logger.error(f"Database connection error: {e}")
-        raise e
+logger.info(f"GetVno API URL: {GET_VNO_API}")
+
+def get_cursor():
+    """Get database cursor using connection from config"""
+    db = get_db()
+    return db.cursor()
 
 def execute_query(query, params=None):
     """Execute a query and return results"""
-    conn = None
     cursor = None
     try:
-        conn = get_db_connection()
-        cursor = conn.cursor()
+        cursor = get_cursor()
         
         if params:
             cursor.execute(query, params)
         else:
             cursor.execute(query)
         
-        # Get column names
         columns = [column[0] for column in cursor.description] if cursor.description else []
         rows = []
         for row in cursor.fetchall():
@@ -57,22 +40,17 @@ def execute_query(query, params=None):
         return rows
     except Exception as e:
         logger.error(f"Query error: {e}")
-        logger.error(f"Query: {query}")
-        logger.error(f"Params: {params}")
         raise e
     finally:
         if cursor:
             cursor.close()
-        if conn:
-            conn.close()
 
 def execute_non_query(query, params=None):
-    """Execute a non-query SQL command (INSERT, UPDATE, DELETE)"""
-    conn = None
+    """Execute a non-query SQL command"""
     cursor = None
     try:
-        conn = get_db_connection()
-        cursor = conn.cursor()
+        db = get_db()
+        cursor = db.cursor()
         
         if params:
             logger.info(f"Executing with params: {params}")
@@ -80,68 +58,127 @@ def execute_non_query(query, params=None):
         else:
             cursor.execute(query)
             
-        conn.commit()
+        db.commit()
         return cursor.rowcount
     except Exception as e:
         logger.error(f"Database error: {e}")
-        logger.error(f"Query: {query}")
-        logger.error(f"Params: {params}")
-        if conn:
-            conn.rollback()
+        db = get_db()
+        db.rollback()
         raise e
     finally:
         if cursor:
             cursor.close()
-        if conn:
-            conn.close()
 
 def get_voucher_number(tablename, vdate, vtype, offcode, bcode):
-    """Get voucher number from GetVno API"""
+    """Get voucher number - keep slash in vockey"""
+    
+    # Try 1: Call the GetVno API
     try:
-        response = requests.post(
-            "http://192.168.100.113:8000/GetVno",
-            json={
-                "Tablename": tablename,
-                "Vdate": vdate,
-                "Vtype": vtype,
-                "Offcode": offcode,
-                "Bcode": bcode
-            },
-            timeout=10
-        )
+        payload = {
+            "Tablename": tablename,
+            "Vdate": vdate,
+            "Vtype": vtype,
+            "Offcode": offcode,
+            "Bcode": bcode
+        }
+        
+        logger.info(f"📡 Calling GetVno API at: {GET_VNO_API}")
+        logger.info(f"📦 Payload: {payload}")
+        
+        response = requests.post(GET_VNO_API, json=payload, timeout=5)
+        
+        logger.info(f"📡 API Response Status: {response.status_code}")
         
         if response.status_code == 200:
             data = response.json()
+            logger.info(f"📡 API Response Data: {data}")
             
             if data.get("status") == "success" and data.get("vno"):
                 vno = data.get("vno")
-                vockey = (bcode + vno.replace('/', '')).replace(' ', '')
-                if len(vockey) > 19:
-                    vockey = vockey[:19]
+                logger.info(f"✅ Got voucher number from API: '{vno}'")
+                
+                # IMPORTANT: vno should already have slash like "00112/0326"
+                # vockey = bcode + vno (keep the slash)
+                vockey = bcode + vno
+                logger.info(f"✅ Generated vockey: '{vockey}'")
+                logger.info(f"✅ vockey length: {len(vockey)}")
+                
+                # Check if vockey has slash
+                if '/' in vockey:
+                    logger.info("✅ vockey contains slash (GOOD)")
+                else:
+                    logger.warning("⚠️ vockey does NOT contain slash (BAD)")
+                    # If no slash, try to add it back
+                    if '/' in vno:
+                        logger.info("vno has slash, so vockey should too")
+                    else:
+                        logger.warning("vno also missing slash")
+                
                 return vno, vockey
-        
-        return generate_temp_voucher_number(vdate, vtype, offcode, bcode)
+            else:
+                logger.warning(f"⚠️ API returned invalid response: {data}")
+                
     except Exception as e:
-        logger.error(f"Error getting voucher number: {e}")
-        return generate_temp_voucher_number(vdate, vtype, offcode, bcode)
-
-def generate_temp_voucher_number(vdate, vtype, offcode, bcode):
-    """Generate a temporary voucher number when API fails"""
+        logger.warning(f"❌ GetVno API error: {e}")
+    
+    # Try 2: Generate from database with proper format
+    logger.info("🔄 Generating voucher number from database...")
+    
     try:
-        date_obj = datetime.strptime(vdate, '%Y-%m-%d')
-        month_year = date_obj.strftime('%m%y')
-    except:
-        month_year = datetime.now().strftime('%m%y')
-    
-    random_num = random.randint(1, 99999)
-    vno = f"{random_num:05d}/{month_year}"
-    vockey = (bcode + vno.replace('/', '')).replace(' ', '')[:19]
-    
-    logger.info(f"Generated temporary voucher: {vno} / {vockey}")
-    return vno, vockey
+        # Get next sequence number
+        query = """
+            SELECT ISNULL(MAX(CAST(SUBSTRING(vno, 1, CHARINDEX('/', vno) - 1) AS INT)), 0) + 1 as next_num
+            FROM HRMSVariableAllowanceHead 
+            WHERE vtype = ? AND offcode = ?
+        """
+        result = execute_query(query, [vtype, offcode])
+        next_num = result[0]['next_num'] if result and result[0].get('next_num') else 1
+        
+        # Format month/year
+        try:
+            date_obj = datetime.strptime(vdate, '%Y-%m-%d')
+            month_year = date_obj.strftime('%m%y')
+        except:
+            month_year = datetime.now().strftime('%m%y')
+        
+        # Generate vno WITH slash
+        vno = f"{next_num:05d}/{month_year}"
+        logger.info(f"📝 Generated sequential vno: '{vno}'")
+        
+        # Generate vockey WITH slash (bcode + vno)
+        vockey = bcode + vno
+        logger.info(f"📝 Generated vockey: '{vockey}'")
+        
+        # Verify slash is present
+        if '/' in vockey:
+            logger.info("✅ vockey contains slash (GOOD)")
+        else:
+            logger.warning("⚠️ vockey does NOT contain slash (BAD)")
+        
+        return vno, vockey
+        
+    except Exception as e:
+        logger.error(f"Error generating voucher: {e}")
+        
+        # Final fallback - generate random number with slash
+        try:
+            date_obj = datetime.strptime(vdate, '%Y-%m-%d')
+            month_year = date_obj.strftime('%m%y')
+        except:
+            month_year = datetime.now().strftime('%m%y')
+        
+        random_num = random.randint(1, 99999)
+        vno = f"{random_num:05d}/{month_year}"
+        logger.info(f"🎲 Generated random vno: '{vno}'")
+        
+        # Generate vockey WITH slash
+        vockey = bcode + vno
+        logger.info(f"🎲 Generated vockey: '{vockey}'")
+        
+        return vno, vockey
 
 def get_user_id(username):
-    """Get user ID from username using direct DB query"""
+    """Get user ID from username"""
     try:
         query = "SELECT TOP 1 Uid FROM comUsers WHERE Userlogin = ?"
         results = execute_query(query, (username,))
@@ -153,7 +190,7 @@ def get_user_id(username):
         return '07'
 
 def get_period_info(vdate):
-    """Get PCode and YCode for a given date using direct DB query"""
+    """Get PCode and YCode for a given date"""
     try:
         query = "SELECT TOP 1 PCode, YCode FROM comPeriods WHERE ? BETWEEN SDate AND EDate"
         results = execute_query(query, (vdate,))
@@ -171,14 +208,12 @@ def format_date_for_sql():
     """Get current date in SQL format"""
     return datetime.now().strftime('%Y-%m-%d %H:%M:%S.%f')[:-3]
 
-# ============= NEW ENDPOINT FOR GETTING VOUCHER WITH DETAILS =============
+# ============= GET VOUCHER WITH DETAILS =============
 @variable_allowance_bp.route('/get-voucher-with-details', methods=['POST'])
 def get_voucher_with_details():
-    """Get voucher with its details using JOIN query"""
+    """Get voucher with its details"""
     try:
         data = request.json
-        logger.info(f"Received get-voucher-with-details request: {data}")
-        
         if not data:
             return jsonify({"success": False, "error": "No JSON data provided"}), 400
         
@@ -203,41 +238,24 @@ def get_voucher_with_details():
         # Get details
         details_query = """
             SELECT 
-                Pk,
-                EmployeeCode,
-                EmployeeName,
-                AllowancesCode,
-                AllowanceName,
-                Amount,
-                Percentage,
-                BasicPay,
-                LocationCode,
-                vno,
-                vdate,
-                vtype,
-                vockey
+                Pk, EmployeeCode, EmployeeName, AllowancesCode, AllowanceName,
+                Amount, Percentage, BasicPay, LocationCode, vno, vdate, vtype, vockey
             FROM HRMSVariableAllowanceDet
             WHERE vockey = ? AND offcode = ?
             ORDER BY Pk
         """
         details_result = execute_query(details_query, [vockey, offcode])
         
-        logger.info(f"Found {len(details_result)} details for voucher {vockey}")
-        
-        # Format the response
-        voucher_data = {
-            "head": head,
-            "details": details_result
-        }
-        
         return jsonify({
             "success": True,
-            "data": voucher_data
+            "data": {
+                "head": head,
+                "details": details_result
+            }
         }), 200
         
     except Exception as err:
-        logger.error(f"Get voucher with details error: {err}")
-        logger.error(traceback.format_exc())
+        logger.error(f"Error: {err}")
         return jsonify({"success": False, "error": str(err)}), 500
 
 # ============= INSERT VOUCHER =============
@@ -246,7 +264,7 @@ def insert_variable_allowance():
     """Insert Monthly Variable Allowance Head and Details"""
     try:
         data = request.json
-        logger.info(f"Received insert request")
+        logger.info(f"📝 Received insert request")
         
         if not data:
             return jsonify({"success": False, "error": "No JSON data provided"}), 400
@@ -259,28 +277,31 @@ def insert_variable_allowance():
         if not head:
             return jsonify({"success": False, "error": "Head data is required"}), 400
         
-        if not details or not isinstance(details, list):
-            return jsonify({"success": False, "error": "Details array is required"}), 400
-        
-        if len(details) == 0:
+        if not details or len(details) == 0:
             return jsonify({"success": False, "error": "At least one detail record is required"}), 400
         
         head_data = head.get("data", {})
         head_table = head.get("tableName", "HRMSVariableAllowanceHead")
-        detail_table = details[0].get("tableName", "HRMSVariableAllowanceDet")
         
         bcode = selected_branch or "010101"
         vdate = head_data.get('vdate', datetime.now().strftime('%Y-%m-%d'))
         vtype = head_data.get('vtype', 'VRA')
         
+        # Get voucher number
+        logger.info(f"🎫 Getting voucher number")
         vno, vockey = get_voucher_number(head_table, vdate, vtype, offcode, bcode)
         
         if not vno or not vockey:
             return jsonify({"success": False, "error": "Failed to generate voucher number"}), 500
         
+        logger.info(f"✅ Final values:")
+        logger.info(f"   vno: '{vno}'")
+        logger.info(f"   vockey: '{vockey}'")
+        logger.info(f"   vockey contains slash: {'/' in vockey}")
+        
         createdby = head_data.get('createdby')
         if not createdby:
-            return jsonify({"success": False, "error": "createdby (username) is required"}), 400
+            return jsonify({"success": False, "error": "createdby is required"}), 400
         
         uid = get_user_id(createdby)
         period_info = get_period_info(vdate)
@@ -288,7 +309,7 @@ def insert_variable_allowance():
         ycode = period_info.get('ycode')
         
         if not pcode or not ycode:
-            return jsonify({"success": False, "error": "Could not determine period for the given date"}), 400
+            return jsonify({"success": False, "error": "Could not determine period"}), 400
         
         createdate = format_date_for_sql()
         head_row = {
@@ -325,10 +346,7 @@ def insert_variable_allowance():
                 head_params.append(val)
         
         head_insert_query = f"INSERT INTO {head_table} ({', '.join(head_columns)}) VALUES ({', '.join(head_values)})"
-        head_rows_affected = execute_non_query(head_insert_query, head_params)
-        
-        if head_rows_affected == 0:
-            return jsonify({"success": False, "error": "Failed to insert head record"}), 500
+        execute_non_query(head_insert_query, head_params)
         
         # Insert details
         successful_details = 0
@@ -336,7 +354,6 @@ def insert_variable_allowance():
         for idx, detail in enumerate(details):
             try:
                 detail_data = detail.get("data", {})
-                
                 if not detail_data:
                     continue
                 
@@ -373,7 +390,7 @@ def insert_variable_allowance():
                         detail_params.append(val)
                 
                 if detail_columns:
-                    detail_insert_query = f"INSERT INTO {detail_table} ({', '.join(detail_columns)}) VALUES ({', '.join(detail_values)})"
+                    detail_insert_query = f"INSERT INTO HRMSVariableAllowanceDet ({', '.join(detail_columns)}) VALUES ({', '.join(detail_values)})"
                     execute_non_query(detail_insert_query, detail_params)
                     successful_details += 1
                     
@@ -387,7 +404,7 @@ def insert_variable_allowance():
         
         return jsonify({
             "success": True,
-            "message": f"Variable allowance saved successfully with {successful_details} employees",
+            "message": f"Voucher saved successfully",
             "vno": vno,
             "vockey": vockey
         }), 200
@@ -399,11 +416,9 @@ def insert_variable_allowance():
 # ============= UPDATE VOUCHER =============
 @variable_allowance_bp.route('/update-variable-allowance', methods=['POST'])
 def update_variable_allowance():
-    """Update Monthly Variable Allowance Head and Details"""
+    """Update voucher"""
     try:
         data = request.json
-        logger.info(f"Received update request")
-        
         if not data:
             return jsonify({"success": False, "error": "No JSON data provided"}), 400
         
@@ -417,23 +432,22 @@ def update_variable_allowance():
         
         head_data = head.get("data", {})
         head_table = head.get("tableName", "HRMSVariableAllowanceHead")
-        detail_table = details[0].get("tableName", "HRMSVariableAllowanceDet") if details else "HRMSVariableAllowanceDet"
         
         vno = head_data.get('vno')
         vockey = head_data.get('vockey')
         
         if not vno or not vockey:
-            return jsonify({"success": False, "error": "vno and vockey are required for update"}), 400
+            return jsonify({"success": False, "error": "vno and vockey are required"}), 400
         
         bcode = selected_branch or head_data.get('bcode', '010101')
         editby = head_data.get('editby')
         
         if not editby:
-            return jsonify({"success": False, "error": "editby (username) is required"}), 400
+            return jsonify({"success": False, "error": "editby is required"}), 400
         
         editdate = format_date_for_sql()
         
-        # Check if voucher is posted
+        # Check if posted
         check_query = f"SELECT status FROM {head_table} WHERE vockey = ? AND offcode = ?"
         check_result = execute_query(check_query, [vockey, offcode])
         if check_result and check_result[0].get('status') == 2:
@@ -452,7 +466,7 @@ def update_variable_allowance():
         ycode = period_info.get('ycode')
         
         # Delete existing details
-        delete_details_query = f"DELETE FROM {detail_table} WHERE vockey = ? AND offcode = ?"
+        delete_details_query = "DELETE FROM HRMSVariableAllowanceDet WHERE vockey = ? AND offcode = ?"
         execute_non_query(delete_details_query, [vockey, offcode])
         
         # Insert new details
@@ -461,7 +475,6 @@ def update_variable_allowance():
         for idx, detail in enumerate(details):
             try:
                 detail_data = detail.get("data", {})
-                
                 if not detail_data:
                     continue
                 
@@ -498,7 +511,7 @@ def update_variable_allowance():
                         detail_params.append(val)
                 
                 if detail_columns:
-                    detail_insert_query = f"INSERT INTO {detail_table} ({', '.join(detail_columns)}) VALUES ({', '.join(detail_values)})"
+                    detail_insert_query = f"INSERT INTO HRMSVariableAllowanceDet ({', '.join(detail_columns)}) VALUES ({', '.join(detail_values)})"
                     execute_non_query(detail_insert_query, detail_params)
                     successful_details += 1
                     
@@ -507,7 +520,7 @@ def update_variable_allowance():
         
         return jsonify({
             "success": True,
-            "message": f"Variable allowance updated successfully with {successful_details} employees"
+            "message": f"Voucher updated successfully"
         }), 200
         
     except Exception as err:
@@ -517,7 +530,7 @@ def update_variable_allowance():
 # ============= POST VOUCHER =============
 @variable_allowance_bp.route('/post-variable-allowance', methods=['POST'])
 def post_variable_allowance():
-    """Post a variable allowance voucher"""
+    """Post a voucher"""
     try:
         data = request.json
         if not data:
@@ -528,7 +541,7 @@ def post_variable_allowance():
         posted_by = data.get("posted_by")
         
         if not vockey or not offcode or not posted_by:
-            return jsonify({"success": False, "error": "vockey, offcode, and posted_by are required"}), 400
+            return jsonify({"success": False, "error": "Missing required fields"}), 400
         
         # Check if already posted
         check_query = "SELECT status FROM HRMSVariableAllowanceHead WHERE vockey = ? AND offcode = ?"
@@ -536,7 +549,7 @@ def post_variable_allowance():
         if check_result and check_result[0].get('status') == 2:
             return jsonify({"success": False, "error": "Voucher is already posted"}), 400
         
-        # Update head status to posted
+        # Update head status
         posteddate = format_date_for_sql()
         update_query = "UPDATE HRMSVariableAllowanceHead SET status = 2, posted = 1, postedby = ?, posteddate = ? WHERE vockey = ? AND offcode = ?"
         execute_non_query(update_query, [posted_by, posteddate, vockey, offcode])
@@ -550,7 +563,7 @@ def post_variable_allowance():
 # ============= DELETE VOUCHER =============
 @variable_allowance_bp.route('/delete-variable-allowance', methods=['POST'])
 def delete_variable_allowance():
-    """Delete a variable allowance voucher"""
+    """Delete a voucher"""
     try:
         data = request.json
         if not data:
@@ -562,26 +575,18 @@ def delete_variable_allowance():
         if not vockey or not offcode:
             return jsonify({"success": False, "error": "vockey and offcode are required"}), 400
         
-        # Check if voucher is posted
+        # Check if posted
         check_query = "SELECT status FROM HRMSVariableAllowanceHead WHERE vockey = ? AND offcode = ?"
         check_result = execute_query(check_query, [vockey, offcode])
         
         if check_result and check_result[0].get('status') == 2:
             return jsonify({"success": False, "error": "Cannot delete a posted voucher"}), 400
         
-        # Delete details first
-        delete_details_query = "DELETE FROM HRMSVariableAllowanceDet WHERE vockey = ? AND offcode = ?"
-        execute_non_query(delete_details_query, [vockey, offcode])
+        # Delete details and head
+        execute_non_query("DELETE FROM HRMSVariableAllowanceDet WHERE vockey = ? AND offcode = ?", [vockey, offcode])
+        execute_non_query("DELETE FROM HRMSVariableAllowanceHead WHERE vockey = ? AND offcode = ?", [vockey, offcode])
         
-        # Delete head
-        delete_head_query = "DELETE FROM HRMSVariableAllowanceHead WHERE vockey = ? AND offcode = ?"
-        rows_affected = execute_non_query(delete_head_query, [vockey, offcode])
-        
-        return jsonify({
-            "success": True,
-            "message": "Voucher deleted successfully",
-            "rowsAffected": rows_affected
-        }), 200
+        return jsonify({"success": True, "message": "Voucher deleted successfully"}), 200
         
     except Exception as err:
         logger.error(f"Delete error: {err}", exc_info=True)

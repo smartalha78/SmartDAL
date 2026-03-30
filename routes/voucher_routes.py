@@ -56,42 +56,47 @@ def gl_voucher_generation_status():
         if 'conn' in locals():
             conn.close()
 
-@voucher_bp.route('/GetVno', methods=['POST', 'OPTIONS'])
-def GetVno():
+@voucher_bp.route('/GetVnoVockey', methods=['POST', 'OPTIONS'])
+def GetVnoVockey():
     if request.method == 'OPTIONS':
         return '', 200
-    
-    data = request.json
+
+    data = request.json or {}
     Tablename = data.get("Tablename")
     Vdate = data.get("Vdate")
     Vtype = data.get("Vtype")
     Offcode = data.get("Offcode")
     Bcode = data.get("Bcode")
 
-    conn = None
-    cursor = None
+    if not all([Tablename, Vdate, Vtype, Offcode, Bcode]):
+        return jsonify({"status": "fail", "message": "Missing parameters"}), 400
 
     try:
         conn = pyodbc.connect(CONN_STR)
         cursor = conn.cursor()
 
-        sql = f"EXEC dbo.spGetVno ?, ?, ?, ?, ?"
+        sql = "EXEC dbo.spGetVno ?, ?, ?, ?, ?"
         params = (Tablename, Vdate, Vtype, Offcode, Bcode)
+
         cursor.execute(sql, params)
         row = cursor.fetchone()
+
         if not row:
             return jsonify({"status": "fail", "message": "Invalid Voucher No"}), 401
-              
+
+        vno = str(row[0])
+        vockey = str(Bcode) + vno
+        vockey = vockey.replace(" ", "")
+
         return jsonify({
             "status": "success",
-            "vno": row[0]
+            "vno": vno,
+            "vockey": vockey
         }), 200
 
     except Exception as ex:
-        return jsonify({
-            "status": "error",
-            "message": str(ex)
-        }), 500
+        return jsonify({"status": "error", "message": str(ex)}), 500
+
     finally:
         if cursor:
             cursor.close()
