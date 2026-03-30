@@ -15,7 +15,7 @@ table_bp = Blueprint('table', __name__)
 voucher_bp = Blueprint('voucher', __name__)
 user_rights_bp = Blueprint('user_rights', __name__)  # ADD THIS LINE
 variable_allowance_bp = Blueprint('variable_allowance', __name__)  # ADD THIS LINE
-
+attendance_bp = Blueprint('attendance', __name__)  # ADD THIS LINE
 print(f"✅ Created blueprints: auth, generic_crud, employee, screen, table, voucher, user_rights")
 
 # Import routes after blueprint creation to avoid circular imports
@@ -35,6 +35,8 @@ print("  ✅ voucher_routes imported")
 from . import user_rights_routes  # ADD THIS LINE
 print("  ✅ user_rights_routes imported")
 from . import variable_allowance_routes  # ADD THIS LINE
+print("  ✅ variable_allowance_routes imported")
+from . import attendance_routes  # ADD THIS LINE
 print("  ✅ variable_allowance_routes imported")
 
 def register_routes(app):
@@ -56,6 +58,8 @@ def register_routes(app):
     app.register_blueprint(user_rights_bp)  # ADD THIS LINE
     print("  ✅ user_rights_bp registered")
     app.register_blueprint(variable_allowance_bp)  # ADD THIS LINE
+    print("  ✅ variable_allowance_bp registered")
+    app.register_blueprint(attendance_bp)  # ADD THIS LINE
     print("  ✅ variable_allowance_bp registered")
     
     # Also register the main index and health routes
