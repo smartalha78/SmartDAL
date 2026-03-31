@@ -61,13 +61,82 @@ def execute_non_query(query, params=None):
         if cursor:
             cursor.close()
 
+# Cache for primary key column name
+PRIMARY_KEY_COLUMN = None
+
+def get_primary_key_column():
+    """Get the primary key column name from the attendance table"""
+    global PRIMARY_KEY_COLUMN
+    if PRIMARY_KEY_COLUMN is None:
+        try:
+            query = """
+                SELECT COLUMN_NAME 
+                FROM INFORMATION_SCHEMA.COLUMNS 
+                WHERE TABLE_NAME = 'HRMSEmployeeAttendance' 
+                AND COLUMNPROPERTY(object_id('HRMSEmployeeAttendance'), COLUMN_NAME, 'IsIdentity') = 1
+            """
+            results = execute_query(query)
+            if results and len(results) > 0:
+                PRIMARY_KEY_COLUMN = results[0]['COLUMN_NAME']
+                logger.info(f"Found identity column: {PRIMARY_KEY_COLUMN}")
+            else:
+                # Try to find a column named 'Pk', 'ID', 'PK', etc.
+                col_query = """
+                    SELECT COLUMN_NAME 
+                    FROM INFORMATION_SCHEMA.COLUMNS 
+                    WHERE TABLE_NAME = 'HRMSEmployeeAttendance'
+                    ORDER BY ORDINAL_POSITION
+                """
+                cols = execute_query(col_query)
+                for col in cols:
+                    col_name = col['COLUMN_NAME']
+                    if col_name.lower() in ['pk', 'id', 'pkey', 'primarykey']:
+                        PRIMARY_KEY_COLUMN = col_name
+                        logger.info(f"Found primary key column: {PRIMARY_KEY_COLUMN}")
+                        break
+                
+                if PRIMARY_KEY_COLUMN is None:
+                    # Default to first column
+                    PRIMARY_KEY_COLUMN = cols[0]['COLUMN_NAME'] if cols else 'Pk'
+                    logger.info(f"Using first column as primary key: {PRIMARY_KEY_COLUMN}")
+        except Exception as e:
+            logger.error(f"Error getting primary key column: {e}")
+            PRIMARY_KEY_COLUMN = 'Pk'
+    return PRIMARY_KEY_COLUMN
+
+# ============= GET TABLE STRUCTURE =============
+@attendance_bp.route('/attendance/table-structure', methods=['GET'])
+def get_table_structure():
+    """Get the structure of the attendance table"""
+    try:
+        query = """
+            SELECT COLUMN_NAME, DATA_TYPE, IS_NULLABLE, COLUMNPROPERTY(object_id('HRMSEmployeeAttendance'), COLUMN_NAME, 'IsIdentity') as IsIdentity
+            FROM INFORMATION_SCHEMA.COLUMNS 
+            WHERE TABLE_NAME = 'HRMSEmployeeAttendance'
+            ORDER BY ORDINAL_POSITION
+        """
+        results = execute_query(query)
+        
+        pk_column = get_primary_key_column()
+        
+        return jsonify({
+            "success": True,
+            "columns": results,
+            "column_names": [r['COLUMN_NAME'] for r in results],
+            "primary_key": pk_column
+        }), 200
+        
+    except Exception as e:
+        logger.error(f"Get table structure error: {e}")
+        return jsonify({"success": False, "error": str(e)}), 500
+
 # ============= GET EMPLOYEES =============
 @attendance_bp.route('/attendance/employees', methods=['GET'])
 def get_employees():
     """Get list of employees for dropdown"""
     try:
         offcode = request.args.get('offcode', '0101')
-        is_active = request.args.get('isActive', 'True')
+        # is_active = request.args.get('isActive', 'True')
         
         query = """
             SELECT 
@@ -89,8 +158,8 @@ def get_employees():
         """
         params = [offcode]
         
-        if is_active == 'True':
-            query += " AND e.IsActive = 'True'"
+        # if is_active == 'True':
+        #     query += " AND e.IsActive = 'True'"
         
         query += " ORDER BY e.Code"
         
@@ -195,14 +264,13 @@ def search_attendance():
         
         logger.info(f"Searching attendance: offcode={offcode}, from={from_date}, to={to_date}")
         
-        # Build query with employee details
-        query = """
+        # Get the primary key column name
+        pk_column = get_primary_key_column()
+        
+        # Build query with dynamic primary key
+        query = f"""
             SELECT 
-                a.Pk,
-                a.offcode,
-                a.bcode,
-                a.YCode,
-                a.PCode,
+                a.[{pk_column}] as Id,
                 a.EmployeeCode,
                 a.EmployeeName,
                 a.ShiftCode,
@@ -240,10 +308,6 @@ def search_attendance():
                 a.BreakStartTimeIn,
                 a.BreakEndTimeOut,
                 a.EditModeType,
-                a.createdby,
-                a.createdate,
-                a.editby,
-                a.editdate,
                 s.Name as ShiftName,
                 s.shiftHours,
                 e.DepartmentCode,
@@ -252,7 +316,7 @@ def search_attendance():
                 des.Name as DesignationName,
                 e.FName,
                 e.LName
-            FROM HRMSAttendence a
+            FROM HRMSEmployeeAttendance a
             LEFT JOIN HRMSShift s ON a.ShiftCode = s.Code AND a.offcode = s.offcode
             LEFT JOIN hrmsemployee e ON a.EmployeeCode = e.Code AND a.offcode = e.offcode
             LEFT JOIN hrmsdepartment d ON e.DepartmentCode = d.Code AND a.offcode = d.offcode
@@ -316,6 +380,51 @@ def search_attendance():
         logger.error(f"Search attendance error: {e}")
         return jsonify({"success": False, "error": str(e)}), 500
 
+# ============= UPDATE ATTENDANCE RECORD =============
+@attendance_bp.route('/attendance/update', methods=['POST'])
+def update_attendance():
+    """Update a single attendance record"""
+    try:
+        data = request.json
+        record_id = data.get('id')  # Changed from pk to id
+        field = data.get('field')
+        value = data.get('value')
+        
+        if not record_id or not field:
+            return jsonify({"success": False, "error": "Record ID and field are required"}), 400
+        
+        # Validate field name (prevent SQL injection)
+        allowed_fields = [
+            'Timein', 'TimeOut', 'attStatus', 'dayStatus', 'attTimeStatus',
+            'LateHours', 'OverTime', 'TotalWorkingHours', 'EditModeType',
+            'LateHours_Minuts', 'OverTime_Minuts', 'TotalWorkingHours_Minuts',
+            'LeaveEarlyMinute', 'EarlyInMinute', 'ExcessMinute',
+            'LateInDeductionDay', 'EarlyOutDeductionDay', 'TotalDeductionDay'
+        ]
+        
+        if field not in allowed_fields:
+            return jsonify({"success": False, "error": f"Field {field} cannot be updated"}), 400
+        
+        # Get the primary key column name
+        pk_column = get_primary_key_column()
+        
+        # Update query
+        query = f"""
+            UPDATE HRMSEmployeeAttendance 
+            SET {field} = ?
+            WHERE [{pk_column}] = ?
+        """
+        execute_non_query(query, [value, record_id])
+        
+        return jsonify({
+            "success": True,
+            "message": "Attendance record updated successfully"
+        }), 200
+        
+    except Exception as e:
+        logger.error(f"Update attendance error: {e}")
+        return jsonify({"success": False, "error": str(e)}), 500
+
 # ============= GET EMPLOYEE ATTENDANCE REPORT =============
 @attendance_bp.route('/attendance/employee-report', methods=['POST'])
 def get_employee_attendance_report():
@@ -356,13 +465,17 @@ def get_employee_attendance_report():
         """
         employee_info = execute_query(emp_query, [offcode, employee_code])
         
+        # Get the primary key column name
+        pk_column = get_primary_key_column()
+        
         # Get attendance records
-        att_query = """
+        att_query = f"""
             SELECT 
+                a.[{pk_column}] as Id,
                 a.*,
                 s.Name as ShiftName,
                 s.shiftHours
-            FROM HRMSAttendence a
+            FROM HRMSEmployeeAttendance a
             LEFT JOIN HRMSShift s ON a.ShiftCode = s.Code AND a.offcode = s.offcode
             WHERE a.offcode = ? 
                 AND a.EmployeeCode = ?
@@ -421,49 +534,6 @@ def get_employee_attendance_report():
         logger.error(f"Get employee attendance report error: {e}")
         return jsonify({"success": False, "error": str(e)}), 500
 
-# ============= UPDATE ATTENDANCE RECORD =============
-@attendance_bp.route('/attendance/update', methods=['POST'])
-def update_attendance():
-    """Update a single attendance record"""
-    try:
-        data = request.json
-        pk = data.get('pk')
-        field = data.get('field')
-        value = data.get('value')
-        user = data.get('user', 'SYSTEM')
-        
-        if not pk or not field:
-            return jsonify({"success": False, "error": "PK and field are required"}), 400
-        
-        # Validate field name (prevent SQL injection)
-        allowed_fields = [
-            'Timein', 'TimeOut', 'attStatus', 'dayStatus', 'attTimeStatus',
-            'LateHours', 'OverTime', 'TotalWorkingHours', 'EditModeType',
-            'LateHours_Minuts', 'OverTime_Minuts', 'TotalWorkingHours_Minuts',
-            'LeaveEarlyMinute', 'EarlyInMinute', 'ExcessMinute',
-            'LateInDeductionDay', 'EarlyOutDeductionDay', 'TotalDeductionDay'
-        ]
-        
-        if field not in allowed_fields:
-            return jsonify({"success": False, "error": f"Field {field} cannot be updated"}), 400
-        
-        # Update query
-        query = f"""
-            UPDATE HRMSAttendence 
-            SET {field} = ?, editby = ?, editdate = GETDATE() 
-            WHERE Pk = ?
-        """
-        execute_non_query(query, [value, user, pk])
-        
-        return jsonify({
-            "success": True,
-            "message": "Attendance record updated successfully"
-        }), 200
-        
-    except Exception as e:
-        logger.error(f"Update attendance error: {e}")
-        return jsonify({"success": False, "error": str(e)}), 500
-
 # ============= GET ATTENDANCE SUMMARY =============
 @attendance_bp.route('/attendance/summary', methods=['POST'])
 def get_attendance_summary():
@@ -494,7 +564,7 @@ def get_attendance_summary():
                 SUM(ISNULL(a.OverTime, 0)) as TotalOvertime,
                 SUM(ISNULL(a.LateHours_Minuts, 0)) as TotalLateMinutes,
                 SUM(ISNULL(a.LeaveEarlyMinute, 0)) as TotalEarlyMinutes
-            FROM HRMSAttendence a
+            FROM HRMSEmployeeAttendance a
             LEFT JOIN hrmsemployee e ON a.EmployeeCode = e.Code AND a.offcode = e.offcode
             LEFT JOIN hrmsdepartment d ON e.DepartmentCode = d.Code AND a.offcode = d.offcode
             LEFT JOIN hrmsdesignation des ON e.DesignationCode = des.Code AND a.offcode = des.offcode
@@ -548,7 +618,7 @@ def get_attendance_stats():
                 SUM(CASE WHEN a.dayStatus IN ('001', 'Working Day') THEN 1 ELSE 0 END) as Present,
                 SUM(CASE WHEN a.dayStatus IN ('002', 'Absent') THEN 1 ELSE 0 END) as Absent,
                 SUM(CASE WHEN a.dayStatus IN ('003', 'Holiday', 'Company Off') THEN 1 ELSE 0 END) as Off
-            FROM HRMSAttendence a
+            FROM HRMSEmployeeAttendance a
             LEFT JOIN hrmsemployee e ON a.EmployeeCode = e.Code AND a.offcode = e.offcode
             WHERE a.offcode = ? AND a.attDate BETWEEN ? AND ? {dept_filter}
             GROUP BY CONVERT(DATE, a.attDate)
@@ -562,7 +632,7 @@ def get_attendance_stats():
             SELECT 
                 a.dayStatus,
                 COUNT(*) as Count
-            FROM HRMSAttendence a
+            FROM HRMSEmployeeAttendance a
             LEFT JOIN hrmsemployee e ON a.EmployeeCode = e.Code AND a.offcode = e.offcode
             WHERE a.offcode = ? AND a.attDate BETWEEN ? AND ? {dept_filter}
             GROUP BY a.dayStatus

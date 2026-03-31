@@ -1,4 +1,4 @@
-from flask import request, jsonify, g
+from flask import request, jsonify
 from . import variable_allowance_bp
 from config.database import get_db, close_db
 import requests
