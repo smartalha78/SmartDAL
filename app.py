@@ -1,4 +1,5 @@
-from flask import Flask, jsonify
+# app.py
+from flask import Flask, jsonify, request
 from flask_cors import CORS
 import logging
 
@@ -9,20 +10,39 @@ from config.database import init_app as init_db
 from routes import register_routes
 
 # Configure logging
-logging.basicConfig(level=logging.INFO)
+logging.basicConfig(level=logging.DEBUG)
 logger = logging.getLogger(__name__)
 
 def create_app():
     """Application factory pattern"""
     app = Flask(__name__)
     
-    # Enable CORS - USE ONLY THIS, remove the after_request handler
-    CORS(app, origins=["http://localhost:3000"], supports_credentials=True)
+    # Enable CORS for all routes
+    CORS(app, 
+         origins=["http://localhost:3000", "http://127.0.0.1:3000", "http://192.168.100.113:3000", "*"],
+         supports_credentials=True,
+         allow_headers=["Content-Type", "Authorization", "Accept", "X-Requested-With"],
+         methods=["GET", "POST", "PUT", "DELETE", "OPTIONS"],
+         expose_headers=["Content-Type", "Authorization"])
+    
+    # ============= ADD THIS HERE - BEFORE register_routes =============
+    @app.before_request
+    def handle_options_requests():
+        """Handle OPTIONS requests globally"""
+        if request.method == "OPTIONS":
+            response = jsonify({'success': True})
+            response.headers.add('Access-Control-Allow-Origin', '*')
+            response.headers.add('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, OPTIONS')
+            response.headers.add('Access-Control-Allow-Headers', 'Content-Type, Authorization, Accept')
+            response.headers.add('Access-Control-Allow-Credentials', 'true')
+            response.headers.add('Access-Control-Max-Age', '3600')  # Cache preflight for 1 hour
+            return response, 200
+    # ============= END OF ADDED CODE =============
     
     # Initialize database
     init_db(app)
     
-    # Register all routes (this will register ALL blueprints)
+    # Register all routes
     register_routes(app)
     
     return app
@@ -31,12 +51,15 @@ def create_app():
 app = create_app()
 
 # Debug route to check all registered endpoints
-@app.route('/debug/routes', methods=['GET'])
+@app.route('/debug/routes', methods=['GET', 'OPTIONS'])
 def debug_routes():
-    """List all registered routes"""
+    """List all registered routes - PUBLIC for testing"""
+    if request.method == 'OPTIONS':
+        return '', 200
+    
     routes = []
     for rule in app.url_map.iter_rules():
-        if rule.endpoint != 'static':
+        if rule.endpoint != 'static' and rule.endpoint != 'debug_routes':
             routes.append({
                 "endpoint": rule.endpoint,
                 "methods": [m for m in rule.methods if m not in ['OPTIONS', 'HEAD']],
@@ -45,58 +68,18 @@ def debug_routes():
     return jsonify({
         "total_routes": len(routes),
         "routes": routes
-    })
+    }), 200
 
 if __name__ == "__main__":
     print("=" * 60)
     print("🚀 Starting SmartGold ERP API Server v2.0")
     print("=" * 60)
     print("📍 Server will run on: http://0.0.0.0:8000")
-    print("\n📋 AVAILABLE ENDPOINTS:")
-    print("  ────────────────────────────────────────────")
-    print("  🔧 AUTHENTICATION ENDPOINTS:")
-    print("    POST /GetMenu       - Get user menu")
-    print("\n  💰 VOUCHER ENDPOINTS:")
-    print("    GET  /GetVno        - Get voucher number")
-    print("    POST /FillTable     - Fill table data")
-    print("    POST /gl_voucher_generation_status - Update GL voucher status")
-    print("    POST /gl_Posting    - GL Posting")
-    print("    POST /stk_Posting   - Stock Posting")
-    print("\n  📊 TABLE STRUCTURE ENDPOINTS:")
-    print("    POST /get-table-headers - Get column headers")
-    print("    POST /get-table-structure - Get table structure")
-    print("    POST /get-table-relationships - Get relationships")
-    print("    POST /get-table-data - Get paginated data")
-    print("    GET  /debug/table-structure/<table_name> - Debug table structure")
-    print("    GET  /check-table/<table_name> - Check table")
-    print("\n  👔 EMPLOYEE MANAGEMENT:")
-    print("    📋 POST /insert-EmployeeHeadDet - Insert employee with all details")
-    print("\n  ✨ GENERIC CRUD ENDPOINTS:")
-    print("    📥 POST /table/insert  - Generic INSERT for any table")
-    print("    📝 POST /table/update  - Generic UPDATE for any table")
-    print("    🔄 POST /table/upsert  - Generic UPSERT")
-    print("    🗑️  POST /table/delete  - Generic DELETE")
-    print("    📦 POST /table/bulk-insert - Bulk insert multiple records")
-    print("\n  🖥️  SCREEN CONFIGURATION:")
-    print("    POST /screen/get-config")
-    print("    POST /screen/document-statuses")
-    print("    POST /screen/menu-permissions")
-    print("    POST /screen/update-employment-status")
-    print("    POST /screen/refresh-table-data")
-    print("\n  👤 USER RIGHTS MANAGEMENT:")
-    print("    GET  /user-rights/test         - Test endpoint (no DB)")
-    print("    GET  /user-rights/test-db      - Test endpoint (with DB)")
-    print("    POST /user-rights/get           - Get user rights for screen")
-    print("    POST /user-rights/save          - Save user rights")
-    print("    GET  /user-rights/users         - Get all users")
-    print("    GET  /user-rights/menus         - Get all menus")
-    print("    POST /user-rights/bulk-get      - Get all rights for user")
-    print("    POST /user-rights/bulk-save     - Bulk save user rights")
-    print("\n  🔍 DEBUG ENDPOINT:")
-    print("    GET  /debug/routes       - List all registered routes")
-    print("\n  ❤️  HEALTH ENDPOINT:")
-    print("    GET  /health        - Health check")
-    print("    GET  /              - API Information")
+    print("\n📋 TEST ENDPOINTS:")
+    print("  GET  /debug/routes  - List all registered routes")
+    print("  GET  /test-cors     - Test CORS")
+    print("  GET  /health        - Health check")
+    print("  POST /GetMenu       - Login endpoint")
     print("=" * 60)
     
     app.run(host="0.0.0.0", port=8000, debug=True)

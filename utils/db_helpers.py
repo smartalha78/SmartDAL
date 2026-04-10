@@ -65,9 +65,8 @@ def execute_non_query(query, params=None):
     return execute_query(query, params)
 
 def get_company_data():
-    """Get company data from menu API"""
+    """Fetch company/menu data from GetMenu API without using session"""
     try:
-        # Call your login API to get full menu
         response = requests.post(
             f"http://{DB_SERVER}:8000/GetMenu",
             json={
@@ -75,24 +74,31 @@ def get_company_data():
                 "userpassword": "abc123",
                 "Menuid": "01",
                 "nooftables": "3"
-            }
+            },
+            timeout=10
         )
-        data = response.json()
-        if not data or not data.get("data") or not data["data"].get("tbl3"):
+        if response.status_code != 200:
+            logger.error(f"GetMenu API returned {response.status_code}")
             return None
 
-        menu = data["data"]["tbl3"]
+        data = response.json()
+        tbl1 = data.get("data", {}).get("tbl1", [])
+        tbl2 = data.get("data", {}).get("tbl2", [])
+        tbl3 = data.get("data", {}).get("tbl3", [])
+
+        if not tbl3:
+            logger.warning("Menu (tbl3) is empty")
 
         return {
-            "company": data["data"]["tbl1"][0] if data["data"].get("tbl1") else {},
-            "branches": data["data"]["tbl2"] if data["data"].get("tbl2") else [],
-            "menu": menu
+            "company": tbl1[0] if tbl1 else {},
+            "branches": tbl2,
+            "menu": tbl3
         }
 
     except Exception as e:
-        print(f"Error getting company data: {e}")
+        logger.error(f"Unexpected error fetching company data: {e}")
         return None
-
+    
 def execute_soap_query(query):
     """Utility function to execute SQL queries and return results in a consistent format"""
     conn = None

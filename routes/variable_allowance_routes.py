@@ -1,6 +1,7 @@
 from flask import request, jsonify
 from . import variable_allowance_bp
 from config.database import get_db, close_db
+from utils.jwt_helper import token_required  # ADD THIS IMPORT
 import requests
 from datetime import datetime
 import logging
@@ -210,6 +211,7 @@ def format_date_for_sql():
 
 # ============= GET VOUCHER WITH DETAILS =============
 @variable_allowance_bp.route('/get-voucher-with-details', methods=['POST'])
+@token_required  # ADD THIS DECORATOR
 def get_voucher_with_details():
     """Get voucher with its details"""
     try:
@@ -260,6 +262,7 @@ def get_voucher_with_details():
 
 # ============= INSERT VOUCHER =============
 @variable_allowance_bp.route('/insert-variable-allowance', methods=['POST'])
+@token_required  # ADD THIS DECORATOR
 def insert_variable_allowance():
     """Insert Monthly Variable Allowance Head and Details"""
     try:
@@ -415,6 +418,7 @@ def insert_variable_allowance():
 
 # ============= UPDATE VOUCHER =============
 @variable_allowance_bp.route('/update-variable-allowance', methods=['POST'])
+@token_required  # ADD THIS DECORATOR
 def update_variable_allowance():
     """Update voucher"""
     try:
@@ -529,6 +533,7 @@ def update_variable_allowance():
 
 # ============= POST VOUCHER =============
 @variable_allowance_bp.route('/post-variable-allowance', methods=['POST'])
+@token_required  # ADD THIS DECORATOR
 def post_variable_allowance():
     """Post a voucher"""
     try:
@@ -562,6 +567,7 @@ def post_variable_allowance():
 
 # ============= DELETE VOUCHER =============
 @variable_allowance_bp.route('/delete-variable-allowance', methods=['POST'])
+@token_required  # ADD THIS DECORATOR
 def delete_variable_allowance():
     """Delete a voucher"""
     try:

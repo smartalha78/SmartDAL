@@ -12,11 +12,18 @@ import logging
 
 logger = logging.getLogger(__name__)
 
+# Make these endpoints public for testing (remove @token_required temporarily)
+# You can add back token protection later
+
 @table_bp.route('/get-table-headers', methods=['POST', 'OPTIONS'])
 def get_table_headers():
     """Get column headers and sample data from a table"""
     if request.method == 'OPTIONS':
-        return '', 200
+        response = jsonify({'status': 'ok'})
+        response.headers.add('Access-Control-Allow-Origin', '*')
+        response.headers.add('Access-Control-Allow-Methods', 'POST, OPTIONS')
+        response.headers.add('Access-Control-Allow-Headers', 'Content-Type, Authorization')
+        return response, 200
     
     try:
         data = request.json
@@ -40,17 +47,25 @@ def get_table_headers():
                 "type": guess_type(val)
             }
         
-        return jsonify({"success": True, "fields": fields})
+        response = jsonify({"success": True, "fields": fields})
+        response.headers.add('Access-Control-Allow-Origin', '*')
+        return response, 200
     
     except Exception as err:
         print("Error in /get-table-headers:", err)
-        return jsonify({"success": False, "error": str(err)}), 500
+        response = jsonify({"success": False, "error": str(err)})
+        response.headers.add('Access-Control-Allow-Origin', '*')
+        return response, 500
 
 @table_bp.route('/get-table-structure', methods=['POST', 'OPTIONS'])
 def get_table_structure():
     """Get detailed column structure from INFORMATION_SCHEMA"""
     if request.method == 'OPTIONS':
-        return '', 200
+        response = jsonify({'status': 'ok'})
+        response.headers.add('Access-Control-Allow-Origin', '*')
+        response.headers.add('Access-Control-Allow-Methods', 'POST, OPTIONS')
+        response.headers.add('Access-Control-Allow-Headers', 'Content-Type, Authorization')
+        return response, 200
     
     try:
         data = request.json
@@ -62,65 +77,25 @@ def get_table_structure():
             return jsonify({"success": False, "error": "tableName is required"}), 400
         
         result = get_table_structure_data(table_name)
-        return jsonify(result)
+        response = jsonify(result)
+        response.headers.add('Access-Control-Allow-Origin', '*')
+        return response, 200
     
     except Exception as err:
         print("Error in /get-table-structure:", err)
-        return jsonify({"success": False, "error": str(err)}), 500
-
-@table_bp.route('/get-table-relationships', methods=['POST', 'OPTIONS'])
-def get_table_relationships():
-    """Get foreign key relationships for a table"""
-    if request.method == 'OPTIONS':
-        return '', 200
-    
-    try:
-        data = request.json
-        if not data:
-            return jsonify({"success": False, "error": "No JSON data provided"}), 400
-        
-        table_name = data.get("tableName")
-        if not table_name:
-            return jsonify({"success": False, "error": "tableName is required"}), 400
-        
-        query = f"""
-            SELECT 
-                fk.name AS 'ConstraintName',
-                OBJECT_NAME(fk.parent_object_id) AS 'TableName',
-                COL_NAME(fkc.parent_object_id, fkc.parent_column_id) AS 'ColumnName',
-                OBJECT_NAME(fk.referenced_object_id) AS 'ReferencedTable',
-                COL_NAME(fkc.referenced_object_id, fkc.referenced_column_id) AS 'ReferencedColumn'
-            FROM 
-                sys.foreign_keys AS fk
-            INNER JOIN 
-                sys.foreign_key_columns AS fkc ON fk.object_id = fkc.constraint_object_id
-            WHERE 
-                OBJECT_NAME(fk.parent_object_id) = '{table_name}'
-        """
-        
-        relationships = execute_soap_query(query)
-        
-        formatted_relationships = []
-        for rel in relationships:
-            formatted_relationships.append({
-                "ConstraintName": rel.get("ConstraintName", [""])[0],
-                "TableName": rel.get("TableName", [""])[0],
-                "ColumnName": rel.get("ColumnName", [""])[0],
-                "ReferencedTable": rel.get("ReferencedTable", [""])[0],
-                "ReferencedColumn": rel.get("ReferencedColumn", [""])[0]
-            })
-        
-        return jsonify({"success": True, "relationships": formatted_relationships})
-    
-    except Exception as err:
-        print("Error in /get-table-relationships:", err)
-        return jsonify({"success": False, "error": str(err)}), 500
+        response = jsonify({"success": False, "error": str(err)})
+        response.headers.add('Access-Control-Allow-Origin', '*')
+        return response, 500
 
 @table_bp.route('/get-table-data', methods=['POST', 'OPTIONS'])
 def get_table_data():
     """Get paginated table data with optional WHERE clause and company filtering"""
     if request.method == 'OPTIONS':
-        return '', 200
+        response = jsonify({'status': 'ok'})
+        response.headers.add('Access-Control-Allow-Origin', '*')
+        response.headers.add('Access-Control-Allow-Methods', 'POST, OPTIONS')
+        response.headers.add('Access-Control-Allow-Headers', 'Content-Type, Authorization')
+        return response, 200
     
     try:
         data = request.json
@@ -186,7 +161,7 @@ def get_table_data():
                 obj[key] = row[key][0] if row.get(key) and len(row[key]) > 0 else ""
             json_rows.append(obj)
         
-        return jsonify({
+        response = jsonify({
             "success": True,
             "rows": json_rows,
             "totalCount": total_count,
@@ -196,10 +171,14 @@ def get_table_data():
             "offcodeApplied": bool(company_offcode),
             "usePagination": use_pagination
         })
+        response.headers.add('Access-Control-Allow-Origin', '*')
+        return response, 200
     
     except Exception as err:
         print("❌ getTableData fatal error:", err)
-        return jsonify({"success": False, "error": str(err)}), 500
+        response = jsonify({"success": False, "error": str(err)})
+        response.headers.add('Access-Control-Allow-Origin', '*')
+        return response, 500
 
 @table_bp.route('/debug/table-structure/<table_name>', methods=['GET'])
 def debug_table_structure(table_name):
@@ -236,3 +215,51 @@ def check_table(table_name):
         }), 200
     except Exception as e:
         return jsonify({"success": False, "error": str(e)}), 500
+
+@table_bp.route('/get-table-relationships', methods=['POST', 'OPTIONS'])
+def get_table_relationships():
+    """Get foreign key relationships for a table"""
+    if request.method == 'OPTIONS':
+        return '', 200
+    
+    try:
+        data = request.json
+        if not data:
+            return jsonify({"success": False, "error": "No JSON data provided"}), 400
+        
+        table_name = data.get("tableName")
+        if not table_name:
+            return jsonify({"success": False, "error": "tableName is required"}), 400
+        
+        query = f"""
+            SELECT 
+                fk.name AS 'ConstraintName',
+                OBJECT_NAME(fk.parent_object_id) AS 'TableName',
+                COL_NAME(fkc.parent_object_id, fkc.parent_column_id) AS 'ColumnName',
+                OBJECT_NAME(fk.referenced_object_id) AS 'ReferencedTable',
+                COL_NAME(fkc.referenced_object_id, fkc.referenced_column_id) AS 'ReferencedColumn'
+            FROM 
+                sys.foreign_keys AS fk
+            INNER JOIN 
+                sys.foreign_key_columns AS fkc ON fk.object_id = fkc.constraint_object_id
+            WHERE 
+                OBJECT_NAME(fk.parent_object_id) = '{table_name}'
+        """
+        
+        relationships = execute_soap_query(query)
+        
+        formatted_relationships = []
+        for rel in relationships:
+            formatted_relationships.append({
+                "ConstraintName": rel.get("ConstraintName", [""])[0],
+                "TableName": rel.get("TableName", [""])[0],
+                "ColumnName": rel.get("ColumnName", [""])[0],
+                "ReferencedTable": rel.get("ReferencedTable", [""])[0],
+                "ReferencedColumn": rel.get("ReferencedColumn", [""])[0]
+            })
+        
+        return jsonify({"success": True, "relationships": formatted_relationships})
+    
+    except Exception as err:
+        print("Error in /get-table-relationships:", err)
+        return jsonify({"success": False, "error": str(err)}), 500

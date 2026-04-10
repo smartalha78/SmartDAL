@@ -1,13 +1,15 @@
 # routes/user_rights_routes.py
 from flask import request, jsonify
 from utils.db_helpers import execute_query, execute_non_query
-from . import user_rights_bp  # Import the blueprint from the current package
+from utils.jwt_helper import token_required  # ADD THIS IMPORT
+from . import user_rights_bp
 import logging
 
 logger = logging.getLogger(__name__)
 
-# SUPER SIMPLE TEST - Just returns a message without any DB calls
+# SIMPLE TEST - Can be public or protected based on your need
 @user_rights_bp.route('/user-rights/test', methods=['GET'])
+# @token_required  # Optional: Uncomment if you want to protect this too
 def test():
     return jsonify({
         "success": True,
@@ -15,8 +17,9 @@ def test():
         "note": "This is a simple test without database"
     })
 
-# Simple test with database
+# Simple test with database - PROTECTED
 @user_rights_bp.route('/user-rights/test-db', methods=['GET'])
+@token_required  # ADD THIS DECORATOR
 def test_db():
     try:
         result = execute_query("SELECT COUNT(*) as count FROM comUsers")
@@ -31,8 +34,9 @@ def test_db():
             "error": str(e)
         }), 500
 
-# Get user rights for a specific user and screen
+# Get user rights for a specific user and screen - PROTECTED
 @user_rights_bp.route('/user-rights/get', methods=['POST'])
+@token_required  # ADD THIS DECORATOR
 def get_user_rights():
     """Get user rights for a specific user and screen"""
     try:
@@ -104,8 +108,9 @@ def get_user_rights():
         logger.error(f"Error getting user rights: {e}")
         return jsonify({"success": False, "error": str(e)}), 500
 
-# Save/Update user rights
+# Save/Update user rights - PROTECTED
 @user_rights_bp.route('/user-rights/save', methods=['POST'])
+@token_required  # ADD THIS DECORATOR
 def save_user_rights():
     """Save or update user rights"""
     try:
@@ -175,8 +180,9 @@ def save_user_rights():
         logger.error(f"Error saving user rights: {e}")
         return jsonify({"success": False, "error": str(e)}), 500
 
-# Get all users for dropdown
+# Get all users for dropdown - PROTECTED
 @user_rights_bp.route('/user-rights/users', methods=['GET'])
+@token_required  # ADD THIS DECORATOR
 def get_users():
     """Get all users for dropdown selection"""
     try:
@@ -191,8 +197,9 @@ def get_users():
         logger.error(f"Error getting users: {e}")
         return jsonify({"success": False, "error": str(e)}), 500
 
-# Get all menus for dropdown
+# Get all menus for dropdown - PROTECTED
 @user_rights_bp.route('/user-rights/menus', methods=['GET'])
+@token_required  # ADD THIS DECORATOR
 def get_menus():
     """Get all menus for dropdown selection"""
     try:
@@ -224,8 +231,9 @@ def build_menu_tree(menus, parent_id=None):
             tree.append(menu)
     return tree
 
-# Get user rights for all menus (bulk)
+# Get user rights for all menus (bulk) - PROTECTED
 @user_rights_bp.route('/user-rights/bulk-get', methods=['POST'])
+@token_required  # ADD THIS DECORATOR
 def get_user_rights_bulk():
     """Get all user rights for a specific user"""
     try:
@@ -277,8 +285,9 @@ def get_user_rights_bulk():
         logger.error(f"Error getting bulk user rights: {e}")
         return jsonify({"success": False, "error": str(e)}), 500
 
-# Bulk save user rights
+# Bulk save user rights - PROTECTED
 @user_rights_bp.route('/user-rights/bulk-save', methods=['POST'])
+@token_required  # ADD THIS DECORATOR
 def save_user_rights_bulk():
     """Save multiple user rights at once"""
     try:

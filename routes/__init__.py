@@ -1,7 +1,5 @@
-# Route registration
-# This file makes the routes directory a Python package
-
-from flask import Blueprint, jsonify
+# routes/__init__.py
+from flask import Blueprint, jsonify, request
 from flask_cors import CORS
 
 print("🔍 Loading routes/__init__.py")
@@ -13,12 +11,13 @@ employee_bp = Blueprint('employee', __name__)
 screen_bp = Blueprint('screen', __name__)
 table_bp = Blueprint('table', __name__)
 voucher_bp = Blueprint('voucher', __name__)
-user_rights_bp = Blueprint('user_rights', __name__)  # ADD THIS LINE
-variable_allowance_bp = Blueprint('variable_allowance', __name__)  # ADD THIS LINE
-attendance_bp = Blueprint('attendance', __name__)  # ADD THIS LINE
-print(f"✅ Created blueprints: auth, generic_crud, employee, screen, table, voucher, user_rights")
+user_rights_bp = Blueprint('user_rights', __name__)
+variable_allowance_bp = Blueprint('variable_allowance', __name__)
+attendance_bp = Blueprint('attendance', __name__)
 
-# Import routes after blueprint creation to avoid circular imports
+print(f"✅ Created blueprints: auth, generic_crud, employee, screen, table, voucher, user_rights, variable_allowance, attendance")
+
+# Import routes after blueprint creation
 print("🔍 Importing route modules...")
 from . import auth_routes
 print("  ✅ auth_routes imported")
@@ -32,17 +31,22 @@ from . import table_routes
 print("  ✅ table_routes imported")
 from . import voucher_routes
 print("  ✅ voucher_routes imported")
-from . import user_rights_routes  # ADD THIS LINE
+from . import user_rights_routes
 print("  ✅ user_rights_routes imported")
-from . import variable_allowance_routes  # ADD THIS LINE
+from . import variable_allowance_routes
 print("  ✅ variable_allowance_routes imported")
-from . import attendance_routes  # ADD THIS LINE
-print("  ✅ variable_allowance_routes imported")
+from . import attendance_routes
+print("  ✅ attendance_routes imported")
 
 def register_routes(app):
     """Register all blueprints with the app"""
     print("🔍 Registering blueprints with app...")
     
+    # Register attendance with /attendance prefix
+    app.register_blueprint(attendance_bp, url_prefix='/attendance')
+    print("  ✅ attendance_bp registered with url_prefix='/attendance'")
+    
+    # Register other blueprints
     app.register_blueprint(auth_bp)
     print("  ✅ auth_bp registered")
     app.register_blueprint(generic_crud_bp)
@@ -55,56 +59,53 @@ def register_routes(app):
     print("  ✅ table_bp registered")
     app.register_blueprint(voucher_bp)
     print("  ✅ voucher_bp registered")
-    app.register_blueprint(user_rights_bp)  # ADD THIS LINE
+    app.register_blueprint(user_rights_bp)
     print("  ✅ user_rights_bp registered")
-    app.register_blueprint(variable_allowance_bp)  # ADD THIS LINE
-    print("  ✅ variable_allowance_bp registered")
-    app.register_blueprint(attendance_bp)  # ADD THIS LINE
+    app.register_blueprint(variable_allowance_bp)
     print("  ✅ variable_allowance_bp registered")
     
-    # Also register the main index and health routes
-    @app.route('/', methods=['GET'])
+    # Register main routes directly on app
+    @app.route('/', methods=['GET', 'OPTIONS'])
     def index():
+        if request.method == 'OPTIONS':
+            return '', 200
         return jsonify({
             "api": "SmartGold ERP API",
             "version": "2.0",
+            "status": "running",
             "endpoints": {
-                "/GetMenu": "POST - Get user menu with credentials",
-                "/GetVno": "GET - Get voucher number",
-                "/FillTable": "POST - Fill table data",
-                "/gl_voucher_generation_status": "POST - Update GL voucher status",
-                "/get-table-headers": "POST - Get table column headers with sample data",
-                "/get-table-structure": "POST - Get detailed table structure",
-                "/get-table-relationships": "POST - Get foreign key relationships",
-                "/get-table-data": "POST - Get paginated table data with filtering",
-                "/insert-EmployeeHeadDet": "POST - Insert employee with all related details",
-                "/table/insert": "POST - Generic INSERT for any table",
-                "/table/update": "POST - Generic UPDATE for any table",
-                "/table/upsert": "POST - Generic INSERT or UPDATE",
-                "/table/delete": "POST - Generic DELETE with WHERE conditions",
-                "/table/bulk-insert": "POST - Bulk insert multiple records",
-                "/health": "GET - Health check"
-            },
-            "status": "running"
+                "login": "/GetMenu (POST)",
+                "health": "/health (GET)",
+                "test_cors": "/test-cors (GET)",
+                "attendance": {
+                    "years": "/attendance/years (GET)",
+                    "months": "/attendance/months (GET)",
+                    "employees": "/attendance/employees (GET)",
+                    "search": "/attendance/search (POST)",
+                    "update": "/attendance/update (POST)"
+                }
+            }
         }), 200
     
-    @app.route('/health', methods=['GET'])
+    @app.route('/health', methods=['GET', 'OPTIONS'])
     def health_check():
-        try:
-            from config.database import CONN_STR
-            import pyodbc
-            conn = pyodbc.connect(CONN_STR)
-            conn.close()
-            return jsonify({
-                "status": "healthy",
-                "database": "connected",
-                "server": "running"
-            }), 200
-        except Exception as ex:
-            return jsonify({
-                "status": "unhealthy",
-                "database": "disconnected",
-                "error": str(ex)
-            }), 500
+        if request.method == 'OPTIONS':
+            return '', 200
+        return jsonify({"status": "healthy"}), 200
+    
+    @app.route('/test-cors', methods=['GET', 'OPTIONS'])
+    def test_cors():
+        """Test CORS endpoint"""
+        if request.method == 'OPTIONS':
+            response = jsonify({'status': 'ok'})
+            response.headers.add('Access-Control-Allow-Origin', '*')
+            response.headers.add('Access-Control-Allow-Headers', 'Content-Type, Authorization')
+            response.headers.add('Access-Control-Allow-Methods', 'GET, POST, OPTIONS')
+            return response, 200
+        return jsonify({
+            "success": True,
+            "message": "CORS is working!",
+            "origin": request.headers.get('Origin', 'Unknown')
+        }), 200
     
     print("✅ All routes registered successfully")

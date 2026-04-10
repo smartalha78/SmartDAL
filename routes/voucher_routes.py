@@ -4,12 +4,14 @@ from flask import request, jsonify
 import pyodbc
 from config.database import CONN_STR
 from utils.db_helpers import execute_query
+from utils.jwt_helper import token_required  # ADD THIS IMPORT
 from . import voucher_bp
 import logging
 
 logger = logging.getLogger(__name__)
 
 @voucher_bp.route('/gl_voucher_generation_status', methods=["POST", "OPTIONS"])
+@token_required  # ADD THIS DECORATOR
 def gl_voucher_generation_status():
     if request.method == 'OPTIONS':
         return '', 200
@@ -57,6 +59,9 @@ def gl_voucher_generation_status():
             conn.close()
 
 @voucher_bp.route('/GetVnoVockey', methods=['POST', 'OPTIONS'])
+# NOTE: This endpoint is called by the variable_allowance module
+# Keep it protected as it's an internal API
+@token_required  # ADD THIS DECORATOR
 def GetVnoVockey():
     if request.method == 'OPTIONS':
         return '', 200
@@ -104,6 +109,7 @@ def GetVnoVockey():
             conn.close()
 
 @voucher_bp.route('/gl_Posting', methods=["POST", "OPTIONS"])
+@token_required  # ADD THIS DECORATOR
 def gl_Posting():
     if request.method == 'OPTIONS':
         return '', 200
@@ -138,6 +144,7 @@ def gl_Posting():
             conn.close()
 
 @voucher_bp.route('/stk_Posting', methods=["POST", "OPTIONS"])
+@token_required  # ADD THIS DECORATOR
 def stk_Posting():
     if request.method == 'OPTIONS':
         return '', 200
@@ -172,6 +179,7 @@ def stk_Posting():
             conn.close()
 
 @voucher_bp.route('/FillTable', methods=['GET', 'POST', 'OPTIONS'])
+@token_required  # ADD THIS DECORATOR
 def FillTable():
     if request.method == 'OPTIONS':
         return '', 200

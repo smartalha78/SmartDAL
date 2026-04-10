@@ -8,6 +8,7 @@ from utils.db_helpers import (
     format_date_for_sql, get_user_uid, get_company_data,  # get_company_data is now here
     get_column_lengths, filter_valid_columns
 )
+from utils.jwt_helper import token_required  # ADD THIS IMPORT
 from . import employee_bp
 import logging
 
@@ -15,6 +16,7 @@ logger = logging.getLogger(__name__)
 
 
 @employee_bp.route('/insert-EmployeeHeadDet', methods=['POST', 'OPTIONS'])
+@token_required  # ADD THIS DECORATOR
 def insert_employee_head_det():
     """Insert employee with all details"""
     if request.method == 'OPTIONS':
@@ -389,3 +391,11 @@ def insert_employee_head_det():
         import traceback
         traceback.print_exc()
         return jsonify({"success": False, "error": str(err)}), 500
+
+
+# Add more employee routes here if they exist, all with @token_required
+# Example:
+# @employee_bp.route('/update-employee', methods=['POST'])
+# @token_required
+# def update_employee():
+#     pass
