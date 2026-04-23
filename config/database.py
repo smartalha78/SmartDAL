@@ -1,8 +1,10 @@
 # Database configuration and connection utilities
-
 import pyodbc
-from flask import current_app, g
+from flask import g
 import logging
+from contextlib import contextmanager
+from functools import lru_cache
+import time
 
 logger = logging.getLogger(__name__)
 
@@ -13,8 +15,27 @@ CONN_STR = (
     f"SERVER={DB_SERVER};"
     "DATABASE=AwaisFancy;"
     "UID=sa;"
-    "PWD=786"
+    "PWD=786;"
+    "Connection Timeout=10;"
 )
+
+# Simple cache for queries
+query_cache = {}
+CACHE_TTL = 300  # 5 minutes
+
+def get_cache_key(query, params):
+    return f"{query}_{str(params)}"
+
+def get_cached_result(key):
+    if key in query_cache:
+        result, timestamp = query_cache[key]
+        if time.time() - timestamp < CACHE_TTL:
+            return result
+        del query_cache[key]
+    return None
+
+def set_cached_result(key, result):
+    query_cache[key] = (result, time.time())
 
 def get_db():
     """Get database connection"""
@@ -27,21 +48,33 @@ def get_db():
             raise e
     return g.db
 
-def get_db_connection():
-    """Get database connection - alias for get_db"""
-    return get_db()
-
 def close_db(e=None):
     """Close database connection"""
     db = g.pop('db', None)
     if db is not None:
         db.close()
-        logger.info("Database connection closed")
 
-def execute_query(query, params=None):
-    """Execute a SELECT query and return results as list of dictionaries"""
+@contextmanager
+def get_cursor():
+    """Get database cursor with automatic cleanup"""
+    db = get_db()
+    cursor = db.cursor()
+    try:
+        yield cursor
+    finally:
+        cursor.close()
+
+def execute_query(query, params=None, use_cache=False):
+    """Execute a SELECT query with optional caching"""
     cursor = None
     try:
+        # Check cache for static data
+        if use_cache:
+            cache_key = get_cache_key(query, params)
+            cached = get_cached_result(cache_key)
+            if cached is not None:
+                return cached
+        
         db = get_db()
         cursor = db.cursor()
         
@@ -50,34 +83,32 @@ def execute_query(query, params=None):
         else:
             cursor.execute(query)
         
-        # Get column names
         columns = [column[0] for column in cursor.description] if cursor.description else []
-        
-        # Fetch all rows and convert to dictionaries
         rows = []
         for row in cursor.fetchall():
             row_dict = {}
             for i, col in enumerate(columns):
                 value = row[i]
-                # Handle datetime objects
                 if hasattr(value, 'strftime'):
                     value = value.strftime('%Y-%m-%d %H:%M:%S')
                 row_dict[col] = value
             rows.append(row_dict)
         
+        # Cache static data
+        if use_cache and rows:
+            set_cached_result(cache_key, rows)
+        
         return rows
         
     except Exception as e:
         logger.error(f"Query error: {e}")
-        logger.error(f"Query: {query}")
-        logger.error(f"Params: {params}")
         raise e
     finally:
         if cursor:
             cursor.close()
 
 def execute_non_query(query, params=None):
-    """Execute a non-SELECT query (INSERT, UPDATE, DELETE) and return number of affected rows"""
+    """Execute a non-SELECT query"""
     cursor = None
     db = None
     try:
@@ -94,53 +125,8 @@ def execute_non_query(query, params=None):
         
     except Exception as e:
         logger.error(f"Database error: {e}")
-        logger.error(f"Query: {query}")
-        logger.error(f"Params: {params}")
         if db:
             db.rollback()
-        raise e
-    finally:
-        if cursor:
-            cursor.close()
-
-def execute_stored_procedure(sp_name, params=None):
-    """Execute a stored procedure and return results"""
-    cursor = None
-    try:
-        db = get_db()
-        cursor = db.cursor()
-        
-        # Build the stored procedure call
-        if params:
-            # Create parameter placeholders
-            param_placeholders = ','.join(['?' for _ in params])
-            query = f"{{CALL {sp_name} ({param_placeholders})}}"
-            cursor.execute(query, params)
-        else:
-            query = f"{{CALL {sp_name}}}"
-            cursor.execute(query)
-        
-        # Get column names
-        columns = [column[0] for column in cursor.description] if cursor.description else []
-        
-        # Fetch all rows and convert to dictionaries
-        rows = []
-        for row in cursor.fetchall():
-            row_dict = {}
-            for i, col in enumerate(columns):
-                value = row[i]
-                # Handle datetime objects
-                if hasattr(value, 'strftime'):
-                    value = value.strftime('%Y-%m-%d %H:%M:%S')
-                row_dict[col] = value
-            rows.append(row_dict)
-        
-        return rows
-        
-    except Exception as e:
-        logger.error(f"Stored procedure error: {e}")
-        logger.error(f"SP Name: {sp_name}")
-        logger.error(f"Params: {params}")
         raise e
     finally:
         if cursor:

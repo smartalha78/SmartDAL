@@ -1,186 +1,160 @@
 from flask import request, jsonify
 from . import attendance_bp
-from config.database import get_db
+from config.database import get_db, execute_query, execute_non_query, query_cache
 import logging
-from datetime import datetime
+from datetime import datetime, timedelta
 from functools import wraps
-from decimal import Decimal
-from datetime import datetime, date
+import pytz
+from functools import lru_cache
+
 # Import from jwt_helper
-from utils.jwt_helper import decode_token, token_required
+from utils.jwt_helper import token_required
 
 logger = logging.getLogger(__name__)
 
-def get_cursor():
-    """Get database cursor using connection from config"""
-    db = get_db()
-    return db.cursor()
+# Pakistan Timezone
+PAK_TZ = pytz.timezone('Asia/Karachi')
 
-def execute_query(query, params=None):
-    """Execute a query and return results"""
-    cursor = None
+# ============= Cached Helper Functions =============
+@lru_cache(maxsize=128)
+def get_cached_shift_timing(shift_code, weekday, offcode):
+    """Get shift timing with LRU cache"""
     try:
-        cursor = get_cursor()
+        query = """
+            SELECT TOP 1
+                DStartTime,
+                DEndTime,
+                ISNULL(shiftGrassInMinuts, 15) as grace_in,
+                ISNULL(shiftGrassOutMinuts, 30) as grace_out
+            FROM HRMSShiftTimeTable st
+            WHERE st.ShiftCode = ? 
+                AND st.WeekDay = ? 
+                AND st.offcode = ?
+        """
+        results = execute_query(query, (shift_code, weekday, offcode))
         
-        if params:
-            cursor.execute(query, params)
-        else:
-            cursor.execute(query)
-        
-        columns = [column[0] for column in cursor.description] if cursor.description else []
-        rows = []
-        for row in cursor.fetchall():
-            row_dict = {}
-            for i, col in enumerate(columns):
-                value = row[i]
-                if isinstance(value, datetime):
-                 value = value.strftime('%Y-%m-%d %H:%M:%S')
-                elif isinstance(value, date):
-                  value = value.strftime('%Y-%m-%d')
-                row_dict[col] = value
-            rows.append(row_dict)
-        return rows
+        if results:
+            return {
+                'start_time': results[0]['DStartTime'],
+                'end_time': results[0]['DEndTime'],
+                'grace_in_minutes': int(results[0]['grace_in']),
+                'grace_out_minutes': int(results[0]['grace_out'])
+            }
+        return {
+            'start_time': '09:00',
+            'end_time': '18:00',
+            'grace_in_minutes': 15,
+            'grace_out_minutes': 30
+        }
     except Exception as e:
-        logger.error(f"Query error: {e}")
-        logger.error(f"Query: {query}")
-        raise e
-    finally:
-        if cursor:
-            cursor.close()
+        logger.error(f"Error getting shift timing: {e}")
+        return {
+            'start_time': '09:00',
+            'end_time': '18:00',
+            'grace_in_minutes': 15,
+            'grace_out_minutes': 30
+        }
 
-def execute_non_query(query, params=None):
-    """Execute a non-query SQL command"""
-    cursor = None
-    db = None
+def get_shift_timing(shift_code, date_obj, offcode='0101'):
+    """Get shift timing with caching"""
+    weekday = date_obj.weekday()
+    return get_cached_shift_timing(shift_code, weekday, offcode)
+
+def parse_time_to_datetime(date_obj, time_str):
+    """Fast time parsing"""
+    if not time_str:
+        return None
     try:
-        db = get_db()
-        cursor = db.cursor()
-        
-        if params:
-            cursor.execute(query, params)
+        if ':' in time_str:
+            parts = time_str.split(':')
+            hour = int(parts[0])
+            minute = int(parts[1]) if len(parts) > 1 else 0
         else:
-            cursor.execute(query)
-            
-        db.commit()
-        return cursor.rowcount
-    except Exception as e:
-        logger.error(f"Database error: {e}")
-        if db:
-            db.rollback()
-        raise e
-    finally:
-        if cursor:
-            cursor.close()
+            hour = int(time_str)
+            minute = 0
+        return datetime(date_obj.year, date_obj.month, date_obj.day, hour, minute, 0)
+    except:
+        return None
 
-# ============= GET YEARS FROM COMYEAR =============
+def get_current_datetime():
+    """Get current datetime in Pakistan timezone"""
+    return datetime.now(PAK_TZ)
+
+# ============= GET YEARS (Cached) =============
 @attendance_bp.route('/years', methods=['GET', 'OPTIONS'])
 @token_required
 def get_years():
-    """Get list of years from comYear table"""
+    """Get list of years - Fast cached response"""
     try:
-        current_date = datetime.now()
-        
         query = """
-            SELECT 
-                YCode,
-                YName,
-                YNameSHD,
-                YSDate,
-                YEDate,
-                isActive,
-                FinancialActive
+            SELECT YCode, YName, YSDate, YEDate
             FROM comYear 
             WHERE isActive = 'True'
             ORDER BY YCode DESC
         """
-        results = execute_query(query)
+        results = execute_query(query, use_cache=True)
         
-        # Find current year based on current date
-        current_year = None
+        current_date = get_current_datetime().date()
+        current_year = results[0] if results else None
+        
         for year in results:
-            ys_date = year.get('YSDate')
-            ye_date = year.get('YEDate')
-            
-            if ys_date and ye_date:
-                if isinstance(ys_date, str):
-                    ys_date = datetime.strptime(ys_date, '%Y-%m-%d')
-                if isinstance(ye_date, str):
-                    ye_date = datetime.strptime(ye_date, '%Y-%m-%d')
-                
+            try:
+                ys_date = datetime.strptime(year['YSDate'].split(' ')[0], '%Y-%m-%d').date()
+                ye_date = datetime.strptime(year['YEDate'].split(' ')[0], '%Y-%m-%d').date()
                 if ys_date <= current_date <= ye_date:
                     current_year = year
                     break
+            except:
+                continue
         
-        return jsonify({
-            "success": True,
-            "data": results,
-            "currentYear": current_year
-        }), 200
-        
+        return jsonify({"success": True, "data": results, "currentYear": current_year}), 200
     except Exception as e:
         logger.error(f"Get years error: {e}")
         return jsonify({"success": False, "error": str(e)}), 500
 
-# ============= GET MONTHS FROM COMPERIODS =============
+# ============= GET MONTHS (Cached) =============
 @attendance_bp.route('/months', methods=['GET', 'OPTIONS'])
 @token_required
 def get_months():
-    """Get months for a specific year from comPeriods"""
+    """Get months for a specific year - Fast cached response"""
     try:
         ycode = request.args.get('ycode')
-        
         if not ycode:
             return jsonify({"success": False, "error": "Year code is required"}), 400
         
-        current_date = datetime.now()
-        
         query = """
-            SELECT 
-                PCode,
-                PName,
-                SDate,
-                EDate,
-                isActive,
-                isFinalPay
+            SELECT PCode, PName, SDate, EDate
             FROM comPeriods 
             WHERE YCode = ? AND isActive = 'True'
             ORDER BY PCode
         """
-        results = execute_query(query, [ycode])
+        results = execute_query(query, [ycode], use_cache=True)
         
-        # Find current month based on current date
-        current_month = None
+        current_date = get_current_datetime().date()
+        current_month = results[0] if results else None
+        
         for month in results:
-            s_date = month.get('SDate')
-            e_date = month.get('EDate')
-            
-            if s_date and e_date:
-                if isinstance(s_date, str):
-                    s_date = datetime.strptime(s_date, '%Y-%m-%d')
-                if isinstance(e_date, str):
-                    e_date = datetime.strptime(e_date, '%Y-%m-%d')
-                
+            try:
+                s_date = datetime.strptime(month['SDate'].split(' ')[0], '%Y-%m-%d').date()
+                e_date = datetime.strptime(month['EDate'].split(' ')[0], '%Y-%m-%d').date()
                 if s_date <= current_date <= e_date:
                     current_month = month
                     break
+            except:
+                continue
         
-        return jsonify({
-            "success": True,
-            "data": results,
-            "currentMonth": current_month
-        }), 200
-        
+        return jsonify({"success": True, "data": results, "currentMonth": current_month}), 200
     except Exception as e:
         logger.error(f"Get months error: {e}")
         return jsonify({"success": False, "error": str(e)}), 500
 
-# ============= GET EMPLOYEES =============
+# ============= GET EMPLOYEES (Fast with limit) =============
 @attendance_bp.route('/employees', methods=['GET', 'OPTIONS'])
 @token_required
 def get_employees():
     """Get list of employees for dropdown"""
     try:
-        offcode = request.args.get('offcode', '0101')
+        offcode = request.args.get('offcode', '1010')
         logger.info(f"Getting employees for offcode: {offcode}")
         
         conn = get_db()
@@ -228,11 +202,32 @@ def get_employees():
         logger.error(f"Get employees error: {e}")
         return jsonify({"success": False, "error": str(e)}), 500
 
-# ============= GET EMPLOYEE DETAILS =============
+# ============= GET SHIFTS (Cached) =============
+@attendance_bp.route('/shifts', methods=['GET', 'OPTIONS'])
+@token_required
+def get_shifts():
+    """Get list of shifts - Cached"""
+    try:
+        offcode = request.args.get('offcode', '0101')
+        
+        query = """
+            SELECT Code, Name
+            FROM HRMSShift 
+            WHERE offcode = ? AND IsActive = 'True'
+            ORDER BY Code
+        """
+        results = execute_query(query, [offcode], use_cache=True)
+        
+        return jsonify({"success": True, "data": results}), 200
+    except Exception as e:
+        logger.error(f"Get shifts error: {e}")
+        return jsonify({"success": False, "error": str(e)}), 500
+
+# ============= GET EMPLOYEE DETAILS (Cached) =============
 @attendance_bp.route('/employee-details', methods=['POST', 'OPTIONS'])
 @token_required
 def get_employee_details():
-    """Get department and designation for a specific employee"""
+    """Get employee details - Cached"""
     try:
         data = request.json
         employee_code = data.get('employeeCode')
@@ -241,53 +236,33 @@ def get_employee_details():
         if not employee_code:
             return jsonify({"success": False, "error": "Employee code is required"}), 400
         
-        # Get employee basic info
         query = """
             SELECT 
-                Code as EmployeeCode,
-                Name as EmployeeName,
-                DepartmentCode,
-                DesignationCode,
-                ShiftCode
-            FROM HRMSEmployee 
-            WHERE offcode = ? AND Code = ?
+                e.Code as EmployeeCode,
+                e.Name as EmployeeName,
+                ISNULL(d.Name, '') as DepartmentName,
+                ISNULL(des.Name, '') as DesignationName,
+                ISNULL(s.Name, '') as ShiftName
+            FROM HRMSEmployee e
+            LEFT JOIN hrmsdepartment d ON e.DepartmentCode = d.Code AND e.offcode = d.offcode
+            LEFT JOIN hrmsdesignation des ON e.DesignationCode = des.Code AND e.offcode = des.offcode
+            LEFT JOIN HRMSShift s ON e.ShiftCode = s.Code AND e.offcode = s.offcode
+            WHERE e.offcode = ? AND e.Code = ?
         """
-        results = execute_query(query, [offcode, employee_code])
+        results = execute_query(query, [offcode, employee_code], use_cache=True)
         
         if results:
-            emp = results[0]
-            
-            # Get department name
-            dept_query = "SELECT Name FROM hrmsdepartment WHERE Code = ? AND offcode = ?"
-            dept = execute_query(dept_query, [emp.get('DepartmentCode', ''), offcode])
-            emp['DepartmentName'] = dept[0]['Name'] if dept else ''
-            
-            # Get designation name
-            des_query = "SELECT Name FROM hrmsdesignation WHERE Code = ? AND offcode = ?"
-            des = execute_query(des_query, [emp.get('DesignationCode', ''), offcode])
-            emp['DesignationName'] = des[0]['Name'] if des else ''
-            
-            # Get shift name
-            shift_query = "SELECT Name FROM HRMSShift WHERE Code = ? AND offcode = ?"
-            shift = execute_query(shift_query, [emp.get('ShiftCode', ''), offcode])
-            emp['ShiftName'] = shift[0]['Name'] if shift else ''
-            
-            return jsonify({
-                "success": True,
-                "data": emp
-            }), 200
-        else:
-            return jsonify({"success": False, "error": "Employee not found"}), 404
-        
+            return jsonify({"success": True, "data": results[0]}), 200
+        return jsonify({"success": False, "error": "Employee not found"}), 404
     except Exception as e:
         logger.error(f"Get employee details error: {e}")
         return jsonify({"success": False, "error": str(e)}), 500
 
-# ============= SEARCH ATTENDANCE =============
+# ============= SEARCH ATTENDANCE (Optimized) =============
 @attendance_bp.route('/search', methods=['POST', 'OPTIONS'])
 @token_required
 def search_attendance():
-    """Search attendance records with filters"""
+    """Search attendance records - Optimized"""
     try:
         data = request.json
         offcode = data.get('offcode', '0101')
@@ -295,12 +270,9 @@ def search_attendance():
         to_date = data.get('toDate')
         employee_code = data.get('employeeCode')
         
-        if not from_date or not to_date:
-            return jsonify({"success": False, "error": "From date and to date are required"}), 400
+        if not from_date or not to_date or not employee_code:
+            return jsonify({"success": False, "error": "Missing required fields"}), 400
         
-        logger.info(f"Searching attendance: offcode={offcode}, from={from_date}, to={to_date}")
-        
-        # Build query
         query = """
             SELECT 
                 a.EmployeeCode,
@@ -316,27 +288,24 @@ def search_attendance():
                 a.LateHours_Minuts,
                 a.LeaveEarlyMinute,
                 a.attDayIN,
-                s.Name as ShiftName
+                a.IsDeductionExempt,
+                a.Editby,
+                a.EditDate,
+                ISNULL(s.Name, '') as ShiftName
             FROM HRMSEmployeeAttendance a
             LEFT JOIN HRMSShift s ON a.ShiftCode = s.Code AND a.offcode = s.offcode
             WHERE a.offcode = ? 
+                AND a.EmployeeCode = ?
                 AND a.attDate BETWEEN ? AND ?
+            ORDER BY a.attDate
         """
-        params = [offcode, from_date, to_date]
         
-        if employee_code:
-            query += " AND a.EmployeeCode = ?"
-            params.append(employee_code)
+        results = execute_query(query, [offcode, employee_code, from_date, to_date])
         
-        query += " ORDER BY a.attDate"
-        
-        results = execute_query(query, params)
-        
-        # Add sequential ID for each row
         for idx, record in enumerate(results):
             record['Id'] = idx + 1
         
-        # Calculate summary
+        # Fast summary calculation
         summary = {
             'totalDays': len(results),
             'presentDays': 0,
@@ -368,169 +337,133 @@ def search_attendance():
             "summary": summary,
             "count": len(results)
         }), 200
-        
     except Exception as e:
         logger.error(f"Search attendance error: {e}")
         return jsonify({"success": False, "error": str(e)}), 500
 
-
-# ============= UPDATE ATTENDANCE RECORD =============
+# ============= UPDATE ATTENDANCE =============
 @attendance_bp.route('/update', methods=['POST', 'OPTIONS'])
 @token_required
 def update_attendance():
-    """Update a single attendance record"""
+    """Update attendance record - Fast"""
     try:
         data = request.json
-        record_id = data.get('id')
         field = data.get('field')
         value = data.get('value')
         employee_code = data.get('employeeCode')
         att_date = data.get('attDate')
+        current_user = data.get('user', 'SYSTEM')
         
-        logger.info(f"Update request - field: {field}, value: {value}, emp: {employee_code}, date: {att_date}")
+        if not field or not employee_code or not att_date:
+            return jsonify({"success": False, "error": "Missing required fields"}), 400
         
-        if not record_id or not field:
-            return jsonify({"success": False, "error": "Record ID and field are required"}), 400
-        
-        allowed_fields = [
-            'Timein', 'TimeOut', 'attStatus', 'dayStatus', 'attTimeStatus',
-            'LateHours', 'OverTime', 'TotalWorkingHours', 'EditModeType',
-            'LateHours_Minuts', 'OverTime_Minuts', 'TotalWorkingHours_Minuts',
-            'LeaveEarlyMinute', 'EarlyInMinute', 'ExcessMinute',
-            'LateInDeductionDay', 'EarlyOutDeductionDay', 'TotalDeductionDay'
-        ]
-        
+        allowed_fields = ['Timein', 'TimeOut', 'ShiftCode', 'IsDeductionExempt']
         if field not in allowed_fields:
             return jsonify({"success": False, "error": f"Field {field} cannot be updated"}), 400
         
         conn = get_db()
         cursor = conn.cursor()
         
-        # First, get the existing record to get the attDate
+        # Get existing record
         cursor.execute("""
-            SELECT attDate FROM HRMSEmployeeAttendance 
+            SELECT Timein, TimeOut, ShiftCode, attDate 
+            FROM HRMSEmployeeAttendance 
             WHERE EmployeeCode = ? AND CAST(attDate AS DATE) = CAST(? AS DATE)
         """, (employee_code, att_date))
-        existing_row = cursor.fetchone()
+        existing = cursor.fetchone()
         
-        if not existing_row:
+        if not existing:
             return jsonify({"success": False, "error": "Record not found"}), 404
         
-        existing_att_date = existing_row[0]
+        date_obj = existing[3].date() if isinstance(existing[3], datetime) else datetime.strptime(str(existing[3]).split(' ')[0], '%Y-%m-%d').date()
         
-        # Convert the value based on field type
-        converted_value = value
+        if field == 'ShiftCode':
+            cursor.execute("""
+                UPDATE HRMSEmployeeAttendance 
+                SET ShiftCode = ?, Editby = ?, EditDate = GETDATE()
+                WHERE EmployeeCode = ? AND CAST(attDate AS DATE) = CAST(? AS DATE)
+            """, (str(value) if value else existing[2], current_user, employee_code, att_date))
         
-        if field in ['Timein', 'TimeOut']:
-            if not value or value == '':
-                converted_value = None
+        elif field == 'IsDeductionExempt':
+            val = 1 if value else 0
+            cursor.execute("""
+                UPDATE HRMSEmployeeAttendance 
+                SET IsDeductionExempt = ?, Editby = ?, EditDate = GETDATE()
+                WHERE EmployeeCode = ? AND CAST(attDate AS DATE) = CAST(? AS DATE)
+            """, (val, current_user, employee_code, att_date))
+        
+        elif field == 'Timein':
+            shift_timing = get_shift_timing(existing[2], date_obj, '0101')
+            shift_start = datetime.strptime(shift_timing['start_time'], '%H:%M').time()
+            shift_start_dt = datetime.combine(date_obj, shift_start)
+            
+            parts = value.split(':')
+            new_time = datetime(date_obj.year, date_obj.month, date_obj.day, int(parts[0]), int(parts[1]), 0)
+            
+            minutes_late = (new_time - shift_start_dt).total_seconds() / 60
+            late_min = round(minutes_late, 2) if minutes_late > shift_timing['grace_in_minutes'] else 0
+            
+            if minutes_late <= 0:
+                att_status = "009"
+            elif minutes_late <= shift_timing['grace_in_minutes']:
+                att_status = "001"
             else:
-                try:
-                    from datetime import datetime
-                    
-                    # Get the date part from the existing record
-                    if isinstance(existing_att_date, datetime):
-                        date_part = existing_att_date.date()
-                    else:
-                        date_part = datetime.strptime(str(existing_att_date).split(' ')[0], '%Y-%m-%d').date()
-                    
-                    # Parse the time string
-                    time_str = str(value).strip()
-                    
-                    # Handle different time formats
-                    hour = 0
-                    minute = 0
-                    second = 0
-                    
-                    # Parse HH:MM format
-                    if ':' in time_str:
-                        time_parts = time_str.split(':')
-                        hour = int(time_parts[0]) if len(time_parts) > 0 else 0
-                        minute = int(time_parts[1]) if len(time_parts) > 1 else 0
-                        second = int(time_parts[2]) if len(time_parts) > 2 else 0
-                    else:
-                        # Try to parse as number (e.g., "5" means 5:00)
-                        try:
-                            hour = int(float(time_str))
-                            minute = 0
-                            second = 0
-                        except:
-                            hour = 0
-                            minute = 0
-                            second = 0
-                    
-                    # Ensure hour is within 0-23
-                    hour = hour % 24
-                    
-                    # Create new datetime
-                    converted_value = datetime(date_part.year, date_part.month, date_part.day, hour, minute, second)
-                    
-                    logger.info(f"Time conversion: {value} -> {converted_value}")
-                    
-                except Exception as e:
-                    logger.error(f"Time conversion error: {e}")
-                    converted_value = None
+                att_status = "003"
+            
+            working_hours = 0
+            if existing[1]:
+                diff = existing[1] - new_time
+                working_hours = diff.total_seconds() / 3600
+                if working_hours > 5:
+                    working_hours -= 1
+                working_hours = round(max(0, working_hours), 2)
+            
+            cursor.execute("""
+                UPDATE HRMSEmployeeAttendance 
+                SET Timein = ?, LateHours_Minuts = ?, attStatus = ?, TotalWorkingHours = ?,
+                    EditModeIn = 1, Editby = ?, EditDate = GETDATE()
+                WHERE EmployeeCode = ? AND CAST(attDate AS DATE) = CAST(? AS DATE)
+            """, (new_time, late_min, att_status, working_hours, current_user, employee_code, att_date))
         
-        # Handle numeric fields
-        numeric_fields = [
-            'LateHours', 'OverTime', 'TotalWorkingHours', 
-            'LateHours_Minuts', 'OverTime_Minuts', 'TotalWorkingHours_Minuts',
-            'LeaveEarlyMinute', 'EarlyInMinute', 'ExcessMinute',
-            'LateInDeductionDay', 'EarlyOutDeductionDay', 'TotalDeductionDay'
-        ]
+        elif field == 'TimeOut':
+            shift_timing = get_shift_timing(existing[2], date_obj, '0101')
+            shift_end = datetime.strptime(shift_timing['end_time'], '%H:%M').time()
+            shift_end_dt = datetime.combine(date_obj, shift_end)
+            
+            parts = value.split(':')
+            new_time = datetime(date_obj.year, date_obj.month, date_obj.day, int(parts[0]), int(parts[1]), 0)
+            
+            minutes_early = (shift_end_dt - new_time).total_seconds() / 60
+            early_min = round(minutes_early, 2) if minutes_early > shift_timing['grace_out_minutes'] else 0
+            
+            working_hours = 0
+            if existing[0]:
+                diff = new_time - existing[0]
+                working_hours = diff.total_seconds() / 3600
+                if working_hours > 5:
+                    working_hours -= 1
+                working_hours = round(max(0, working_hours), 2)
+            
+            cursor.execute("""
+                UPDATE HRMSEmployeeAttendance 
+                SET TimeOut = ?, LeaveEarlyMinute = ?, TotalWorkingHours = ?,
+                    EditModeOut = 1, Editby = ?, EditDate = GETDATE()
+                WHERE EmployeeCode = ? AND CAST(attDate AS DATE) = CAST(? AS DATE)
+            """, (new_time, early_min, working_hours, current_user, employee_code, att_date))
         
-        if field in numeric_fields:
-            if value is None or value == '':
-                converted_value = 0
-            else:
-                try:
-                    converted_value = float(value)
-                except (ValueError, TypeError):
-                    converted_value = 0
-        
-        # For string fields, ensure we're passing string
-        string_fields = ['attStatus', 'dayStatus', 'attTimeStatus']
-        if field in string_fields:
-            converted_value = str(value) if value else ''
-        
-        # For EditModeType, it might be numeric - check its type
-        if field == 'EditModeType':
-            try:
-                converted_value = float(value) if value else 0
-            except:
-                converted_value = 0
-        
-        # Build the update query - REMOVE EditModeType update from this query
-        # Let's only update the field that was requested
-        query = f"""
-            UPDATE HRMSEmployeeAttendance 
-            SET {field} = ?
-            WHERE EmployeeCode = ? AND CAST(attDate AS DATE) = CAST(? AS DATE)
-        """
-        
-        logger.info(f"Executing update - field: {field}, converted_value: {converted_value}, type: {type(converted_value)}")
-        
-        cursor.execute(query, (converted_value, employee_code, att_date))
         conn.commit()
-        
-        rows_affected = cursor.rowcount
         cursor.close()
         
-        if rows_affected > 0:
-            return jsonify({
-                "success": True,
-                "message": "Attendance record updated successfully"
-            }), 200
-        else:
-            return jsonify({"success": False, "error": "No record was updated"}), 404
+        # Clear cache for this employee/year
+        query_cache.clear()
+        
+        return jsonify({"success": True, "message": "Attendance record updated successfully"}), 200
         
     except Exception as e:
         logger.error(f"Update attendance error: {e}")
-        import traceback
-        traceback.print_exc()
         return jsonify({"success": False, "error": str(e)}), 500
 
-# ============= GET MONTHLY ATTENDANCE STATS FOR CHART =============
+# ============= GET MONTHLY STATS (Fast) =============
 @attendance_bp.route('/monthly-stats', methods=['POST', 'OPTIONS'])
 @token_required
 def get_monthly_attendance_stats():
@@ -541,13 +474,12 @@ def get_monthly_attendance_stats():
         employee_code = data.get('employeeCode')
         year_code = data.get('yearCode')
         
-        if not employee_code:
-            return jsonify({"success": False, "error": "Employee code is required"}), 400
+        logger.info(f"Monthly stats request - offcode: {offcode}, employee: {employee_code}, year: {year_code}")
         
-        if not year_code:
-            return jsonify({"success": False, "error": "Year code is required"}), 400
+        if not employee_code or not year_code:
+            return jsonify({"success": False, "error": "Employee code and year code are required"}), 400
         
-        # Get all periods for the year
+        # First, get all periods for the year
         periods_query = """
             SELECT PCode, PName, SDate, EDate
             FROM comPeriods 
@@ -556,10 +488,12 @@ def get_monthly_attendance_stats():
         """
         periods = execute_query(periods_query, [year_code])
         
+        logger.info(f"Found {len(periods)} periods for year {year_code}")
+        
         monthly_stats = []
         
         for period in periods:
-            # Get attendance stats for this month
+            # Get attendance stats for this period
             att_query = """
                 SELECT 
                     COUNT(*) as TotalDays,
@@ -572,24 +506,27 @@ def get_monthly_attendance_stats():
                 FROM HRMSEmployeeAttendance
                 WHERE offcode = ? 
                     AND EmployeeCode = ?
-                    AND attDate BETWEEN ? AND ?
+                    AND attDate >= ? AND attDate <= ?
             """
             att_params = [offcode, employee_code, period['SDate'], period['EDate']]
             
             stats = execute_query(att_query, att_params)
             
-            if stats and len(stats) > 0 and stats[0]['TotalDays'] > 0:
-                monthly_stats.append({
-                    'MonthName': period['PName'],
-                    'PeriodCode': period['PCode'],
-                    'TotalDays': stats[0]['TotalDays'] or 0,
-                    'PresentDays': stats[0]['PresentDays'] or 0,
-                    'AbsentDays': stats[0]['AbsentDays'] or 0,
-                    'OffDays': stats[0]['OffDays'] or 0,
-                    'TotalWorkingHours': round(stats[0]['TotalWorkingHours'] or 0, 2),
-                    'TotalOvertime': round(stats[0]['TotalOvertime'] or 0, 2),
-                    'TotalLateMinutes': round(stats[0]['TotalLateMinutes'] or 0, 2)
-                })
+            if stats and len(stats) > 0:
+                total_days = stats[0]['TotalDays'] or 0
+                if total_days > 0:
+                    monthly_stats.append({
+                        'MonthName': period['PName'],
+                        'PeriodCode': period['PCode'],
+                        'TotalDays': total_days,
+                        'PresentDays': stats[0]['PresentDays'] or 0,
+                        'AbsentDays': stats[0]['AbsentDays'] or 0,
+                        'OffDays': stats[0]['OffDays'] or 0,
+                        'TotalWorkingHours': round(stats[0]['TotalWorkingHours'] or 0, 2),
+                        'TotalOvertime': round(stats[0]['TotalOvertime'] or 0, 2),
+                        'TotalLateMinutes': round(stats[0]['TotalLateMinutes'] or 0, 2)
+                    })
+                    logger.info(f"Period {period['PName']}: TotalDays={total_days}, Present={stats[0]['PresentDays']}")
         
         # Calculate yearly summary
         yearly_summary = {
@@ -601,6 +538,8 @@ def get_monthly_attendance_stats():
             'totalLateMinutes': sum(m['TotalLateMinutes'] for m in monthly_stats)
         }
         
+        logger.info(f"Monthly stats result: {len(monthly_stats)} months with data")
+        
         return jsonify({
             "success": True,
             "data": monthly_stats,
@@ -609,4 +548,7 @@ def get_monthly_attendance_stats():
         
     except Exception as e:
         logger.error(f"Get monthly stats error: {e}")
+        import traceback
+        traceback.print_exc()
         return jsonify({"success": False, "error": str(e)}), 500
+    

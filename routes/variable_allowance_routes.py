@@ -4,6 +4,7 @@ from config.database import get_db, close_db
 from utils.jwt_helper import token_required  # ADD THIS IMPORT
 import requests
 from datetime import datetime
+from config.database import DB_SERVER
 import logging
 import random
 import traceback
@@ -11,7 +12,7 @@ import traceback
 logger = logging.getLogger(__name__)
 
 # API endpoint
-GET_VNO_API = "http://192.168.100.113:8000/GetVnoVockey"
+GET_VNO_API =  f"http://{DB_SERVER}:8000/GetVnoVockey"
 
 logger.info(f"GetVno API URL: {GET_VNO_API}")
 

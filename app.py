@@ -18,9 +18,13 @@ def create_app():
     app = Flask(__name__)
     
     # Enable CORS for all routes
-    CORS(app, 
-         origins=["http://localhost:3000", "http://127.0.0.1:3000", "http://192.168.100.113:3000", "*"],
-         supports_credentials=True,
+    
+    CORS(app,origins=[
+         "http://localhost:3000",
+         "http://127.0.0.1:3000",
+         "http://192.168.100.113:3000"
+     ],
+     supports_credentials=True,
          allow_headers=["Content-Type", "Authorization", "Accept", "X-Requested-With"],
          methods=["GET", "POST", "PUT", "DELETE", "OPTIONS"],
          expose_headers=["Content-Type", "Authorization"])
