@@ -14,8 +14,13 @@ voucher_bp = Blueprint('voucher', __name__)
 user_rights_bp = Blueprint('user_rights', __name__)
 variable_allowance_bp = Blueprint('variable_allowance', __name__)
 attendance_bp = Blueprint('attendance', __name__)
+receivable_bp = Blueprint('receivable', __name__)
+grn_bp = Blueprint('grn', __name__)
+product_costing_bp = Blueprint('product_costing', __name__)
+saleinvoice_bp = Blueprint('saleinvoice', __name__)
+saleorder_bp = Blueprint('saleorder', __name__)
 
-print(f"✅ Created blueprints: auth, generic_crud, employee, screen, table, voucher, user_rights, variable_allowance, attendance")
+print(f"✅ Created blueprints: auth, generic_crud, employee, screen, table, voucher, user_rights, variable_allowance, attendance, receivable, grn,saleinvoice")
 
 # Import routes after blueprint creation
 print("🔍 Importing route modules...")
@@ -37,6 +42,16 @@ from . import variable_allowance_routes
 print("  ✅ variable_allowance_routes imported")
 from . import attendance_routes
 print("  ✅ attendance_routes imported")
+from . import receivable_routes
+print("  ✅ receivable_routes imported")
+from . import grn_routes
+print("  ✅ grn_routes imported")
+from . import product_costing_routes
+print("  ✅ product_costing_routes imported")
+from . import saleinvoice_routes
+print("  ✅ saleinvoice_routes imported")
+from . import saleorder_routes
+print("  ✅ saleorder_routes imported")
 
 def register_routes(app):
     """Register all blueprints with the app"""
@@ -63,6 +78,16 @@ def register_routes(app):
     print("  ✅ user_rights_bp registered")
     app.register_blueprint(variable_allowance_bp)
     print("  ✅ variable_allowance_bp registered")
+    app.register_blueprint(receivable_bp)
+    print("  ✅ receivable_bp registered")
+    app.register_blueprint(grn_bp)
+    print("  ✅ grn_bp registered")
+    app.register_blueprint(product_costing_bp)
+    print("  ✅ product_costing_bp registered")
+    app.register_blueprint(saleinvoice_bp)
+    print("  ✅ saleinvoice_bp registered")
+    app.register_blueprint(saleorder_bp)
+    print("  ✅ saleorder_bp registered")
     
     # Register main routes directly on app
     @app.route('/', methods=['GET', 'OPTIONS'])
