@@ -72,6 +72,7 @@ def get_products():
             WHERE offcode = ? 
                 AND isActive = 'True' 
                 AND IsItemLevel = 'True'
+                AND ItemType = '3' 
             ORDER BY ItemCode
         """
 
